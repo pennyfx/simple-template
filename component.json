@@ -1,0 +1,6 @@
+{
+  "name":"nTask",
+  "dependencies":{
+    "x-tag-core": "*"
+  }
+}
