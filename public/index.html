@@ -1,12 +1,81 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<script type="text/javascript" src="http://code.jquery.com/jquery-latest.min.js"></script>
-	<script type="text/javascript" src="dpd.js"></script>
+  <script type="text/javascript" src="/js/x-tag-components.js"></script>
+	<script type="text/javascript" src="/js/components.js"></script>
+  <script type="text/javascript" src="/js/tasks.js"></script>
+
+  <link rel="stylesheet" type="text/css" href="/css/x-tag-components.css">
+  <link rel="stylesheet" type="text/css" href="/css/tasks.css">
+
 </head>
 <body>
-	<h1>Welcome to Deployd!</h1>
-	<p>You've just created a Deployd app. You can add front-end files in the <code>public</code> folder.</p>
-	<p>If you're new to Deployd, have a look at the <a href="http://docs.deployd.com/docs/getting-started/what-is-deployd.md">Getting Started Guide</a> or <a href="http://docs.deployd.com/docs/getting-started/your-first-api.md">Hello World Tutorial<a>.</p>
+
+  <x-template name="task">
+    <script type="template/script">
+      this.addTemplateListeners({
+        'change:delegate(input)': function(e){
+          if (this.checked) xtag.addClass(e.templateTarget.firstElementChild, 'checked');
+          else xtag.removeClass(e.templateTarget.firstElementChild, 'checked');
+        }
+      });
+    </script>
+
+    <script type="template/content">
+      <p>{text}!</p>
+    </script>
+  </x-template>
+
+  <div>
+    <x-slidebox>
+      <x-slides>
+        <x-slide></x-slide>
+        <x-slide></x-slide>
+        <x-slide></x-slide>
+      </x-slides>
+    </x-slidebox>
+  </div>
+
 </body>
+
+<script type="text/javascript">
+
+  var filters = [
+    { name: 'All' , filter: '*' }
+  ];
+
+  var tasks = [[
+    { text: 'clean office' },
+    { text: 'vacum living room' },
+    { text: 'do dishes' },
+  ],
+  [
+    { text: 'go shopping' },
+    { text: 'plan birthday party' },
+    { text: 'go skydiving' },
+  ],
+  [ { text: 'sell snowboarding gear' } ]
+
+  ];
+
+  var slideboxContain = document.querySelector('x-slides');
+  document.addEventListener('DOMComponentsLoaded', function(){
+
+    tasks.forEach(function(col, idx){
+      col.forEach(function(item){
+        createTask(item,slideboxContain.children[idx]);
+      })
+    });
+
+  });
+
+  function createTask(item, row){
+    //var slide = document.createElement('x-slide');
+    var task = document.createElement('x-task');
+    task.templateData = item;
+    row.appendChild(task);
+
+  }
+
+</script>
 </html>

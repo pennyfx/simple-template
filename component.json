@@ -1,6 +1,9 @@
 {
   "name":"nTask",
   "dependencies":{
-    "x-tag-core": "*"
+    "x-tag-core": "*",
+    "x-tag-slidebox": "*",
+    "x-tag-template": "*",
+    "hammerjs":"*"
   }
 }
