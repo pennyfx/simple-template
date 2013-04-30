@@ -23,7 +23,7 @@ x-appbar {
   position: fixed;
   top:0;
   z-index: 1;
-  font: 2.2rem/2.5rem "MozTT", sans-serif;
+  font: 2.2rem "MozTT", sans-serif;
   background-color: cornflowerblue;
   color: white;
 }
@@ -31,6 +31,7 @@ x-appbar {
 x-appbar > * {
   padding: 8px 10px 0;
   cursor: pointer;
+  display: inline;
 }
 
 x-appbar {
@@ -67,7 +68,7 @@ x-task-column > header {
 }
 
 x-shiftbox > aside > header {
-  display:inline-block;
+  display: inline-block;
   height: 45px;
   width: 45px;
   margin: 0;
