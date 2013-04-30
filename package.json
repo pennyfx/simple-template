@@ -2,7 +2,9 @@
   "name": "nTask",
   "description": "",
   "version": "0.1.0",
-  "dependencies": {},
+  "dependencies": {
+    "express": "~3.2.1"
+  },
   "devDependencies": {
     "bower": "0.7.0",
     "grunt": "~0.4.0",
