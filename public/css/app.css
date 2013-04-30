@@ -1,0 +1,110 @@
+* {
+  -moz-box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  padding:0;
+  margin: 0;
+}
+
+body {
+  font: 13px/1.4 Helvetica,arial,freesans,clean,sans-serif;
+  background-color: #333;
+}
+
+body > x-shiftbox {
+  height: 100%;
+}
+
+x-appbar {
+  position: fixed;
+  top:0;
+  z-index: 1;
+  font: 2.2rem/2.5rem "MozTT", sans-serif;
+  background-color: cornflowerblue;
+  color: white;
+}
+
+x-appbar > * {
+  padding: 8px 10px 0;
+  cursor: pointer;
+}
+
+x-appbar {
+  -moz-box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+  -webkit-box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+  box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+}
+
+
+x-slidebox {
+ margin-top: 50px;
+ background-color: #aaa;
+}
+
+x-slide {
+  border: solid 2px #aaa;
+}
+
+x-task {
+  display: block;
+  margin-bottom: 6px;
+  padding: 4px;
+  background-color: white;
+}
+
+x-task[template="task-edit"] > textarea {
+  width: 100%;
+}
+
+x-task-column > header {
+  font-size: 22px;
+  font-weight: bold;
+  margin: 4px 0 2px 4px;
+}
+
+x-shiftbox > aside > header {
+  display:inline-block;
+  height: 45px;
+  width: 45px;
+  margin: 0;
+  line-height: 49px;
+  background-color: darkorange;
+}
+
+x-shiftbox[shift="downright"][open] > section {
+  top: 49px;
+  left: 49px;
+}
+
+x-shiftbox[shift="right"][open] > section {
+  left: -75%;
+}
+
+menu {
+  padding: 0;
+  margin: 0;
+}
+menu > button {
+  height: 40px ;
+  width: 40px;
+  background-color: black;
+  border: none;
+  cursor: pointer;
+  color: white;
+}
+#topMenu {
+  display: inline-block;
+}
+
+#sideMenu {
+
+}
+
+#sideMenu > button {
+  display: block;
+  margin: 4px;
+}

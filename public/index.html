@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <script type="text/javascript" src="/js/x-tag-components.js"></script>
-	<script type="text/javascript" src="/js/components.js"></script>
+  <meta name="viewport" content="user-scalable=no, width=device-width, initial-scale=1, maximum-scale=1">
+  <script type="text/javascript" src="/js/components.js"></script>
   <script type="text/javascript" src="/js/tasks.js"></script>
 
-  <link rel="stylesheet" type="text/css" href="/css/x-tag-components.css">
-  <link rel="stylesheet" type="text/css" href="/css/tasks.css">
+  <link rel="stylesheet" type="text/css" href="/css/components.css">
+  <link rel="stylesheet" type="text/css" href="/css/app.css">
 
 </head>
 <body>
@@ -14,68 +14,125 @@
   <x-template name="task">
     <script type="template/script">
       this.addTemplateListeners({
-        'change:delegate(input)': function(e){
-          if (this.checked) xtag.addClass(e.templateTarget.firstElementChild, 'checked');
-          else xtag.removeClass(e.templateTarget.firstElementChild, 'checked');
+        'tap': function(e){
+          console.log('tap', e);
         }
       });
     </script>
-
     <script type="template/content">
-      <p>{text}!</p>
+      <p>{text}</p>
+      <div class=".tags"></div>
     </script>
   </x-template>
 
-  <div>
-    <x-slidebox>
-      <x-slides>
-        <x-slide></x-slide>
-        <x-slide></x-slide>
-        <x-slide></x-slide>
-      </x-slides>
-    </x-slidebox>
-  </div>
+  <x-template name="task-edit">
+    <script type="template/script">
+      this.addTemplateListeners({
+        'tap:delegate(button)': function(e){
+          e.templateTarget.rawtext = e.target.previousElementSibling.value;
+          e.templateTarget.setAttribute('template', 'task');
+        }
+      });
+    </script>
+    <script type="template/content">
+      <textarea>{text}</textarea>
+      <button>Save</button>
+    </script>
+  </x-template>
+
+  <x-shiftbox shift="right">
+    <aside>
+      <!-- <header>ntask</header>
+      <menu id="topMenu">
+        <input type="text" />
+        <button>Search</button>
+        <button>Login</button>
+      </menu> -->
+
+      <menu id="sideMenu">
+        <button>Color</button>
+        <button>Tag All</button>
+        <button>Theme</button>
+        <button>Macro</button>
+        <button>Equalz</button>
+        <button>Offline</button>
+      </menu>
+
+    </aside>
+    <section>
+      <x-appbar><div>=</div><header id="header"></header><div>+</div></x-appbar>
+      <x-slidebox>
+        <x-slides></x-slides>
+      </x-slidebox>
+    </section>
+  </x-shiftbox>
 
 </body>
 
 <script type="text/javascript">
 
-  var filters = [
-    { name: 'All' , filter: '*' }
-  ];
+  var slidebox = document.querySelector('x-slidebox');
+  var appbar = document.querySelector('x-appbar');
+  var shiftbox = document.querySelector('x-shiftbox');
 
-  var tasks = [[
-    { text: 'clean office' },
-    { text: 'vacum living room' },
-    { text: 'do dishes' },
-  ],
-  [
-    { text: 'go shopping' },
-    { text: 'plan birthday party' },
-    { text: 'go skydiving' },
-  ],
-  [ { text: 'sell snowboarding gear' } ]
+  slidebox.addEventListener('slideend', setHeader);
 
-  ];
+  function setHeader(){
+    var selected = slidebox.querySelector('x-slide[selected]');
+    if (!selected && slidebox.querySelectorAll('x-slide')[0]) {
+      selected = slidebox.querySelectorAll('x-slide')[0]
+      selected.setAttribute('selected','');
+    }
+    selected = selected.firstElementChild;
+    appbar.heading = selected.name;
+    appbar.subheading = '(' + selected.children.length + ')';
+  }
 
-  var slideboxContain = document.querySelector('x-slides');
+  xtag.addEvents(document, {
+    'tap:delegate(x-appbar > div:first-child)': function(){
+      shiftbox.toggle();
+    },
+    'tap:delegate(x-appbar > div:last-child)': function(){
+      var selected = slidebox.querySelector('x-slide[selected]').firstElementChild;
+      var t = new Task();
+      t.text = selected.filter;
+      t.setAttribute('template','task-edit');
+      selected.insertBefore(t, selected.firstElementChild);
+    },
+    'tap:delegate(x-appbar > header)': function(){
+      console.log("REFRESH");
+    }
+  });
+
   document.addEventListener('DOMComponentsLoaded', function(){
 
-    tasks.forEach(function(col, idx){
-      col.forEach(function(item){
-        createTask(item,slideboxContain.children[idx]);
-      })
+    TaskFilter.myFilters(function(err, columns){
+      columns.forEach(function(data){
+        var column = new TaskFilter();
+        column.name = data.name;
+        column.filter = data.filter;
+        var slide = document.createElement('x-slide');
+        slide.appendChild(column);
+        slidebox.firstElementChild.appendChild(slide);
+      });
+      setHeader();
     });
 
   });
 
-  function createTask(item, row){
-    //var slide = document.createElement('x-slide');
-    var task = document.createElement('x-task');
-    task.templateData = item;
-    row.appendChild(task);
-
-  }
+  Hammer(slidebox).on('swipeleft', function(e){
+    slidebox.slideNext();
+  }).on('swiperight', function(e){
+    slidebox.slidePrevious();
+  }).on('hold', function(e){
+    var t = e.target;
+    while(['X-TASK','BODY'].indexOf(t.nodeName)==-1){
+      t = t.parentNode;
+    }
+    if (t.nodeName == 'X-TASK'){
+      t.setAttribute('template','task-edit');
+    }
+  });
 
 </script>
 </html>

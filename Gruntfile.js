@@ -16,24 +16,17 @@ var target_css = 'public/css',
   // Project configuration.
   grunt.initConfig({
     jshint:{
-      all: ['Gruntfile.js', 'src/**/*.js', 'test/**/*.js']
-    },
-    concat: {
-      dev: {
-        src: ['components/hammerjs/dist/hammer.js'],
-        dest: 'public/js/components.js'
-      }
+      all: ['Gruntfile.js', 'public/js/tasks.js']
     },
     'smush-components': {
       options: {
         fileMap: {
-          js: 'public/js/x-tag-components.js',
-          css: 'public/css/x-tag-components.css'
+          js: 'public/js/components.js',
+          css: 'public/css/components.css'
         }
       }
     },
     bumpup: ['component.json', 'package.json'],
-
     connect: {
       livereload: {
           options: {
@@ -64,7 +57,6 @@ var target_css = 'public/css',
   grunt.loadNpmTasks('grunt-contrib-concat');
   grunt.loadNpmTasks('grunt-contrib-jshint');
   grunt.loadNpmTasks('grunt-bumpup');
-  grunt.loadNpmTasks('grunt-tagrelease');
   grunt.loadNpmTasks('grunt-smush-components');
 
   grunt.loadNpmTasks('grunt-contrib-connect');

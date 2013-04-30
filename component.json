@@ -3,7 +3,10 @@
   "dependencies":{
     "x-tag-core": "*",
     "x-tag-slidebox": "*",
+    "x-tag-shiftbox": "*",
     "x-tag-template": "*",
+    "x-tag-appbar": "*",
+    "x-tag-mediaquery": "*",
     "hammerjs":"*"
   }
 }
