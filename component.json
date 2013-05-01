@@ -8,6 +8,7 @@
     "x-tag-appbar": "*",
     "x-tag-mediaquery": "*",
     "x-tag-modal": "*",
-    "hammerjs":"*"
+    "hammerjs":"*",
+    "git://github.com/pennyfx/db.js.git": "0.8.1"
   }
 }
