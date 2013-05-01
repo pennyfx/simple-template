@@ -11,49 +11,15 @@
 </head>
 <body>
 
-  <x-template name="task">
-    <script type="template/script">
-
-    </script>
-    <script type="template/content">
-      <p>{text}</p>
-      <div class=".tags"></div>
-    </script>
-  </x-template>
-
-  <x-template name="task-edit">
-    <script type="template/script">
-      this.addTemplateListeners({
-        'tap:delegate(button)': function(e){
-          e.templateTarget.rawtext = e.target.previousElementSibling.value;
-          e.templateTarget.setAttribute('template', 'task');
-        }
-      });
-    </script>
-    <script type="template/content">
-      <textarea>{text}</textarea>
-      <button>Save</button>
-    </script>
-  </x-template>
-
   <x-shiftbox shift="right">
     <aside>
-      <!-- <header>ntask</header>
-      <menu id="topMenu">
-        <input type="text" />
-        <button>Search</button>
-        <button>Login</button>
-      </menu> -->
-
       <menu id="sideMenu">
-        <button>Color</button>
-        <button>Tag All</button>
+        <button data-action="new-column">New</button>
         <button>Theme</button>
         <button>Macro</button>
         <button>Equalz</button>
         <button>Offline</button>
       </menu>
-
     </aside>
     <section>
       <x-appbar><div>=</div><header id="header"></header><div>+</div></x-appbar>
@@ -63,6 +29,59 @@
     </section>
   </x-shiftbox>
 
+  <x-modal hidden overlay esc-hide><x-placeholder></x-placeholder></x-modal>
+
+  <x-template name="task">
+    <script type="template/script">
+    </script>
+    <script type="template/content">
+      <p>{text}</p>
+      <div class="tags">{tags}</div>
+    </script>
+  </x-template>
+
+  <x-template name="task-edit">
+    <script type="template/script">
+      this.addTemplateListeners({
+        'tap:delegate(button.update-task)': function(e){
+          console.log('saved');
+          e.templateTarget.parseText(e.target.parentNode.firstElementChild.value);
+          e.templateTarget.setAttribute('template', 'task');
+        }
+      });
+    </script>
+    <script type="template/content">
+      <textarea>{text} {tags}</textarea>
+      <input type="color" name="favcolor">
+      <button class="update-task">Save</button>
+    </script>
+  </x-template>
+
+  <x-template name="new-column">
+    <script type="template/script">
+      this.addTemplateListeners({
+        'tap:delegate(button.create-column)': function(e){
+          var values = {};
+          xtag.query(e.templateTarget, 'input').forEach(function(input){
+            values[input.name] = input.value;
+          });
+          createColumn(values.columnTitle, values.filter, values.headerColor);
+          modal.toggle();
+        }
+      });
+    </script>
+    <script type="template/content">
+      <label for="columnTitle">Name</label>
+      <input type="text" name="columnTitle" >
+      <label for="filter">Filter</label>
+      <input type="text" name="filter" >
+      <label for="filter">Color</label>
+      <input type="color" name="headerColor" >
+      <br/>
+      <button class="create-column">Save</button>
+    </script>
+  </x-template>
+
 </body>
 
 <script type="text/javascript">
@@ -70,19 +89,25 @@
   var slidebox = document.querySelector('x-slidebox');
   var appbar = document.querySelector('x-appbar');
   var shiftbox = document.querySelector('x-shiftbox');
+  var modal = document.querySelector('x-modal');
+
+  document.addEventListener('DOMComponentsLoaded', function(){
+    TaskFilter.myFilters(function(err, columns){
+      columns.forEach(function(data){
+        createColumn(data.name, data.filter, data.headerColor);
+      });
+      setHeader();
+    });
+  });
+
+  /*var colorSelector = document.querySelector('#colorSelector');
+  colorSelector.addEventListener('change', function(){
+    appbar.style.backgroundColor = this.value;
+    var selected = slidebox.querySelector('x-slide[selected]');
+    selected.firstElementChild.headerColor = this.value;
+  });*/
 
   slidebox.addEventListener('slideend', setHeader);
-
-  function setHeader(){
-    var selected = slidebox.querySelector('x-slide[selected]');
-    if (!selected && slidebox.querySelectorAll('x-slide')[0]) {
-      selected = slidebox.querySelectorAll('x-slide')[0]
-      selected.setAttribute('selected','');
-    }
-    selected = selected.firstElementChild;
-    appbar.heading = selected.name;
-    appbar.subheading = '(' + selected.children.length + ')';
-  }
 
   xtag.addEvents(document, {
     'tap:delegate(x-appbar > div:first-child)': function(){
@@ -95,26 +120,40 @@
       t.setAttribute('template','task-edit');
       selected.insertBefore(t, selected.firstElementChild);
     },
-    'tap:delegate(x-appbar > header)': function(){
-      console.log("REFRESH");
+    'tap:delegate(#sideMenu > button)': function(e){
+      switch(e.target.dataset.action){
+        case 'new-column':
+            modal.firstElementChild.setAttribute('template', 'new-column');
+            modal.toggle();
+          break;
+        default:
+          break;
+      }
     }
   });
 
-  document.addEventListener('DOMComponentsLoaded', function(){
 
-    TaskFilter.myFilters(function(err, columns){
-      columns.forEach(function(data){
-        var column = new TaskFilter();
-        column.name = data.name;
-        column.filter = data.filter;
-        var slide = document.createElement('x-slide');
-        slide.appendChild(column);
-        slidebox.firstElementChild.appendChild(slide);
-      });
-      setHeader();
-    });
+  function setHeader(){
+    var selected = slidebox.querySelector('x-slide[selected]');
+    if (!selected && slidebox.querySelectorAll('x-slide')[0]) {
+      selected = slidebox.querySelectorAll('x-slide')[0]
+      selected.setAttribute('selected','');
+    }
+    selected = selected.firstElementChild;
+    appbar.heading = selected.name;
+    appbar.subheading = '(' + selected.children.length + ')';
+    appbar.style.backgroundColor = selected.headerColor;
+  }
 
-  });
+  function createColumn(name, filter, color){
+    var column = new TaskFilter();
+    column.name = name;
+    column.filter = filter;
+    column.headerColor = color;
+    var slide = document.createElement('x-slide');
+    slide.appendChild(column);
+    slidebox.firstElementChild.appendChild(slide);
+  }
 
   Hammer(slidebox).on('swipeleft', function(e){
     slidebox.slideNext();
@@ -128,6 +167,10 @@
     if (t.nodeName == 'X-TASK'){
       t.setAttribute('template','task-edit');
     }
+  });
+
+  Hammer(appbar.children[1]).on('hold', function(e){
+    console.log('header hold');
   });
 
 </script>

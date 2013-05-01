@@ -38,8 +38,12 @@ x-appbar {
   -moz-box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
   -webkit-box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
   box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+  -webkit-transition: background-color 250ms linear;
+   -moz-transition: background-color 250ms linear;
+   -o-transition: background-color 250ms linear;
+   -ms-transition: background-color 250ms linear;
+   transition: background-color 250ms linear;
 }
-
 
 x-slidebox {
  margin-top: 50px;
@@ -59,6 +63,9 @@ x-task {
 
 x-task[template="task-edit"] > textarea {
   width: 100%;
+}
+x-task[template="task"] .tags {
+  font-weight: bold;
 }
 
 x-task-column > header {
@@ -83,6 +90,14 @@ x-shiftbox[shift="downright"][open] > section {
 
 x-shiftbox[shift="right"][open] > section {
   left: -75%;
+}
+
+x-modal {
+  z-index: 1;
+  background-color: white;
+  border-radius: 3px;
+  border: solid 1px #ddd;
+  padding: 20px;
 }
 
 menu {

@@ -1,5 +1,3 @@
-
-
 Task = xtag.register('x-task', {
   mixins: ['template'],
   lifecycle: {
@@ -22,7 +20,6 @@ Task = xtag.register('x-task', {
     },
     text: {
       set: function(value){
-        this.xtag.data.tags = value.match(/(\[[\w-]+\])+/g);
         this.xtag.data.text = value;
       },
       get: function(){
@@ -34,13 +31,25 @@ Task = xtag.register('x-task', {
         return this.xtag.data.tags;
       }
     }
+  },
+  methods: {
+    parseText: function(value){
+      var self = this;
+      this.xtag.data.tags = [];
+      value = value.replace(/(\[([\w-]+)\])/g, function(match,cap1,cap2,offset,string){
+        console.log('debug', arguments);
+        self.xtag.data.tags.push(cap2);
+        return '';
+      });
+      this.xtag.data.text = value;
+    }
   }
 });
 
 Task.filter = function(filter, callback){
 
   callback(null, [
-    { text: 'go shopping' },
+    { text: 'go shopping [pizza][party]'},
     { text: 'plan birthday party' },
     { text: 'go skydiving' },
     { text: 'go shopping' },
@@ -57,7 +66,8 @@ TaskFilter = xtag.register('x-task-column', {
     created: function(){
       this.xtag.data = {
         name: 'Column',
-        filter: '*'
+        filter: '*',
+        headerColor: '#bbb'
       };
       this.innerHTML = "";
     }
@@ -79,6 +89,14 @@ TaskFilter = xtag.register('x-task-column', {
       set: function(value){
         this.xtag.data.name = value;
       }
+    },
+    headerColor: {
+      get: function(){
+        return this.xtag.data.headerColor;
+      },
+      set: function(value){
+        this.xtag.data.headerColor = value;
+      }
     }
   },
   methods: {
@@ -88,7 +106,7 @@ TaskFilter = xtag.register('x-task-column', {
       Task.filter(this.filter, function(err, tasks){
         tasks.forEach(function(item){
           var task = new Task();
-          task.templateData = item;
+          task.parseText(item.text);
           list.appendChild(task);
         });
         xtag.fireEvent(list, 'refreshed');
@@ -99,7 +117,12 @@ TaskFilter = xtag.register('x-task-column', {
 
 TaskFilter.myFilters = function(callback){
   callback(null, [
-    { name: "All", filter: "*" },
-    { name: "To Sell", filter: "[4sale]" }
+    { name: "All", filter: "*", headerColor: "cornflowerblue" },
+    { name: "To Sell", filter: "[4sale]", headerColor: "darkorange" }
   ]);
 };
+
+
+Placeholder = xtag.register('x-placeholder',{
+  mixins: ['template']
+});
