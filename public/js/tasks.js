@@ -124,5 +124,20 @@ TaskFilter.myFilters = function(callback){
 
 
 Placeholder = xtag.register('x-placeholder',{
-  mixins: ['template']
+  mixins: ['template'],
+  lifecycle: {
+    created: function(){
+      this.xtag.data = {};
+    }
+  },
+  accessors: {
+    templateData: {
+      get: function(){
+        return this.xtag.data;
+      },
+      set: function(value){
+        this.xtag.data = value;
+      }
+    }
+  }
 });
