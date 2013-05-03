@@ -1,9 +1,26 @@
-Task = xtag.register('x-task', {
+db.open({
+  server: 'app',
+  version: 1,
+  schema: {
+    column: {
+      key: { keyPath: 'id', autoIncrement: true },
+      feeds: { },
+      indexes: {
+        name: { unique: true }
+      }
+    }
+  }
+}).done(function(s){
+  xtag.fireEvent(document, 'dbconnected', { server: s });
+});
+
+
+Item = xtag.register('x-item', {
   mixins: ['template'],
   lifecycle: {
     created: function(){
-      this.setAttribute('template','task');
-      this.xtag.data = { text: '', tags: [], date: new Date() };
+      this.setAttribute('template','rsspost');
+      this.xtag.data = { head: '', text: '', date: new Date() };
     },
     inserted: function(){
       xtag.mixins.template.lifecycle.created.call(this);
@@ -13,9 +30,14 @@ Task = xtag.register('x-task', {
     templateData: {
       get: function(){
         return this.xtag.data;
-      },
+      }
+    },
+    head: {
       set: function(value){
-        this.xtag.data = value;
+        this.xtag.data.head = value;
+      },
+      get: function(){
+        return this.xtag.data.head;
       }
     },
     text: {
@@ -23,45 +45,19 @@ Task = xtag.register('x-task', {
         this.xtag.data.text = value;
       },
       get: function(){
-        return this.xtag.data.text;
+        return this.xtag.text.head;
       }
     },
-    tags: {
+    date: {
       get: function(){
-        return this.xtag.data.tags;
+        return this.xtag.data.date;
       }
-    }
-  },
-  methods: {
-    parseText: function(value){
-      var self = this;
-      this.xtag.data.tags = [];
-      value = value.replace(/(\[([\w-]+)\])/g, function(match,cap1,cap2,offset,string){
-        console.log('debug', arguments);
-        self.xtag.data.tags.push(cap2);
-        return '';
-      });
-      this.xtag.data.text = value;
     }
   }
 });
 
-Task.filter = function(filter, callback){
-
-  callback(null, [
-    { text: 'go shopping [pizza][party]'},
-    { text: 'plan birthday party' },
-    { text: 'go skydiving' },
-    { text: 'go shopping' },
-    { text: 'plan birthday party <p>pizza pizza</p>' },
-    { text: 'go skydiving' },
-    { text: 'go shopping' },
-    { text: 'plan birthday party' },
-    { text: 'go skydiving' }
-  ]);
-};
-
-TaskFilter = xtag.register('x-task-column', {
+Column = xtag.register('x-task-column', {
+  mixins: ['request'],
   lifecycle: {
     created: function(){
       this.xtag.data = {
@@ -103,25 +99,59 @@ TaskFilter = xtag.register('x-task-column', {
     refresh: function(){
       var list = this;
       list.innerHTML = "";
-      Task.filter(this.filter, function(err, tasks){
-        tasks.forEach(function(item){
-          var task = new Task();
-          task.parseText(item.text);
-          list.appendChild(task);
+
+      var feeds = this.filter.map(function(item, idx){
+        return 'rssurl' + idx + '=' + escape(item);
+      }).join('&');
+
+      console.log(feeds);
+      this.dataset.callbackKey = '_callback';
+      this.dataready = function(e){
+        e.responseText.value.items.forEach(function(post){
+          console.log(post);
+          var item = new Item();
+          item.head = post.title;
+          //item.text = post.description;
+          item.date = post.pubDate;
+          list.appendChild(item);
         });
-        xtag.fireEvent(list, 'refreshed');
-      });
+      }
+      var src =  "http://pipes.yahoo.com/pipes/pipe.run?_id=c4813879bcf601e126cb5cb4b4cdd587&_render=json&" + feeds;
+      console.log(src);
+      this.src = src;
     }
   }
 });
 
-TaskFilter.myFilters = function(callback){
-  callback(null, [
-    { name: "All", filter: "*", headerColor: "cornflowerblue" },
-    { name: "To Sell", filter: "[4sale]", headerColor: "darkorange" }
-  ]);
+Column.myColumns = function(callback){
+  //TODO call indexdb for columns
+  dbconnection.column.query().filter().execute().done(callback);
 };
 
+Column.create = function(name, feeds, color, callback){
+    // index db, if exists, update it ?
+    console.log(arguments);
+
+    dbconnection.query('column').filter('name', name).execute().done(function(results){
+      if (results.length==1){
+        console.log('update', results[0]);
+        dbconnection.column.update({
+          id: results[0].id,
+          name: name,
+          feeds: feeds,
+          headerColor: color
+        }).done(callback);
+      } else {
+        console.log('create');
+        dbconnection.column.add({
+          name: name,
+          feeds: feeds,
+          headerColor: color
+        }).done(callback);
+      }
+    });
+
+};
 
 Placeholder = xtag.register('x-placeholder',{
   mixins: ['template'],

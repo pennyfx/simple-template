@@ -61,19 +61,6 @@ x-task {
   background-color: white;
 }
 
-x-task[template="task-edit"] > textarea {
-  width: 100%;
-}
-x-task[template="task"] .tags {
-  font-weight: bold;
-}
-
-x-task-column > header {
-  font-size: 22px;
-  font-weight: bold;
-  margin: 4px 0 2px 4px;
-}
-
 x-shiftbox > aside > header {
   display: inline-block;
   height: 45px;
@@ -123,4 +110,12 @@ menu > button {
 #sideMenu > button {
   display: block;
   margin: 4px;
+}
+
+x-placeholder[template="new-column"] label {
+  display: block;
+}
+
+x-item {
+  background-color: white;
 }

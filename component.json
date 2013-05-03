@@ -9,6 +9,7 @@
     "x-tag-mediaquery": "*",
     "x-tag-modal": "*",
     "hammerjs":"*",
-    "git://github.com/pennyfx/db.js.git": "0.8.1"
+    "git://github.com/pennyfx/db.js.git": "0.8.1",
+    "git://github.com/pennyfx/async.git": "0.2.6"
   }
 }
