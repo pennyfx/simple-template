@@ -3,7 +3,6 @@
 <head>
   <meta name="viewport" content="user-scalable=no, width=device-width, initial-scale=1, maximum-scale=1">
   <script type="text/javascript" src="/js/components.js"></script>
-  <script type="text/javascript" src="/js/tasks.js"></script>
 
   <link rel="stylesheet" type="text/css" href="/css/components.css">
   <link rel="stylesheet" type="text/css" href="/css/app.css">
@@ -14,111 +13,22 @@
   <x-shiftbox shift="right">
     <aside>
       <menu id="sideMenu">
-        <button data-action="new-column">New</button>
-        <button data-action="empty-db">Empty</button>
-        <button>Macro</button>
-        <button>Equalz</button>
-        <button>Offline</button>
+        <button data-action="sync">Sync</button>
+        <button data-action="refresh">Refresh</button>
       </menu>
     </aside>
     <section>
-      <x-appbar><div>=</div><header id="header"></header><div>+</div></x-appbar>
-      <x-slidebox>
-        <x-slides></x-slides>
-      </x-slidebox>
+      <x-appbar><div>=</div><header id="header">Web App Header</header><div>+</div></x-appbar>
+      <section>Main App Content</section>
     </section>
   </x-shiftbox>
 
-  <x-modal hidden overlay esc-hide><x-placeholder></x-placeholder></x-modal>
-
-
-<!-- Templates -->
-
-  <x-template name="rsspost">
-    <script type="template/script">
-    </script>
-    <script type="template/content">
-      <h3>{head}</h3>
-      <div>{text}</div>
-      <div>{date}</div>
-    </script>
-  </x-template>
-
-  <x-template name="new-column">
-    <script type="template/script">
-      this.addTemplateListeners({
-        'tap:delegate(button.create-column)': function(e){
-          var values = { columnTitle:'', headerColor: '', feeds: []};
-          var inputs =xtag.query(e.templateTarget, 'input').forEach(function(input){
-            if (typeof values[input.name] !== undefined){
-              values[input.name] = input.value;
-            }
-          });
-          xtag.query(e.templateTarget, '.selected-rss-sources option').forEach(function(option){
-            values.feeds.push(option.value);
-          });
-          console.log('DEBUG:', values);
-          Column.create(values.columnTitle, values.feeds, values.headerColor, function(results){
-              console.log(results);
-          });
-
-          modal.toggle();
-        },
-        'keydown:keypass(13):delegate(input[name="rssUrl"])': function(e){
-          var url = "http://pipes.yahoo.com/pipes/pipe.run?_id=68cf7f06c7396263dc4e526f6b466a45&_render=json&rssurl=" + this.value;
-          var panel = xtag.query(this.parentNode,'.jsonp')[0];
-          panel.src = url;
-        },
-        'dataready:delegate(x-panel)': function(e){
-          var self = this;
-          var panel = xtag.query(this.parentNode,'.rss-sources')[0];
-          panel.innerHTML = '';
-          e.request.responseText.value.items.forEach(function(item){
-            var option = document.createElement('option');
-            option.value = item.link;
-            option.innerHTML = item.title;
-            panel.appendChild(option);
-          });
-        },
-        'keydown:keypass(13):delegate(select.rss-sources)': function(e){
-          var selectedList = xtag.query(this.parentNode, 'select.selected-rss-sources')[0];
-          var selectedOption = this.options[this.selectedIndex];
-          var option = document.createElement('option');
-          option.value = selectedOption.value;
-          option.innerHTML = selectedOption.innerHTML;
-          selectedList.appendChild(option);
-        },
-        'keydown:keypass(46):delegate(select.selected-rss-sources)': function(e){
-          this.removeChild(this.options[this.selectedIndex]);
-        }
-      });
-    </script>
-    <script type="template/content">
-      <label for="columnTitle">Name</label>
-      <input type="text" name="columnTitle" >
-
-      <label for="headerColor">Color</label>
-      <input type="color" name="headerColor" >
-
-      <label for="rssUrl">Site Url</label>
-      <input type="text" name="rssUrl" >
-
-      <label for="available-feeds">Available Feeds</label>
-      <select name="available-feeds" class="rss-sources" multiple></select>
-
-      <label for="feeds">Selected Feeds</label>
-      <select name="feeds" class="selected-rss-sources" multiple></select>
-      <br/>
-      <button class="create-column">Save</button>
-      <x-panel class="jsonp" data-callback-key="_callback"></x-panel>
-    </script>
-  </x-template>
+  <x-modal hidden overlay esc-hide>Modal</x-modal>
 
 </body>
 
 <script type="text/javascript">
 
-  var slidebox = document.querySelector('x-slidebox');
   var appbar = document.querySelector('x-appbar');
   var shiftbox = document.querySelector('x-shiftbox');
   var modal = document.querySelector('x-modal');
@@ -132,88 +42,16 @@
     });
   });
 
-  /*var colorSelector = document.querySelector('#colorSelector');
-  colorSelector.addEventListener('change', function(){
-    appbar.style.backgroundColor = this.value;
-    var selected = slidebox.querySelector('x-slide[selected]');
-    selected.firstElementChild.headerColor = this.value;
-  });*/
-
-  slidebox.addEventListener('slideend', setHeader);
-
   xtag.addEvents(document, {
     'tap:delegate(x-appbar > div:first-child)': function(){
       shiftbox.toggle();
     },
     'tap:delegate(x-appbar > div:last-child)': function(){
-      modal.firstElementChild.setAttribute('template', 'new-column');
       modal.toggle();
     },
     'tap:delegate(#sideMenu > button)': function(e){
-      switch(e.target.dataset.action){
-        case 'new-column':
-            modal.firstElementChild.setAttribute('template', 'new-column');
-            modal.toggle();
-          break;
-        case 'empty-db':
-          /*if (server){
-            ['column','item'].forEach(function(type){
-              server.query(type).filter().execute().done(function(results){
-                results.forEach(function(item){
-                  server
-                });
-              });
-            });
-            server
-          } else {
-
-          }
-          */
-        default:
-          break;
-      }
+        console.log('menu action', e.target.dataset.action);
     }
-  });
-
-
-  function setHeader(){
-    var selected = slidebox.querySelector('x-slide[selected]');
-    if (!selected && slidebox.querySelectorAll('x-slide')[0]) {
-      selected = slidebox.querySelectorAll('x-slide')[0]
-      selected.setAttribute('selected','');
-    }
-    selected = selected.firstElementChild;
-    appbar.heading = selected.name;
-    appbar.subheading = '(' + selected.children.length + ')';
-    appbar.style.backgroundColor = selected.headerColor;
-  }
-
-  function createColumn(name, filter, color){
-    var column = new Column();
-    column.name = name;
-    column.filter = filter;
-    column.headerColor = color;
-    var slide = document.createElement('x-slide');
-    slide.appendChild(column);
-    slidebox.firstElementChild.appendChild(slide);
-  }
-
-  Hammer(slidebox).on('swipeleft', function(e){
-    slidebox.slideNext();
-  }).on('swiperight', function(e){
-    slidebox.slidePrevious();
-  }).on('hold', function(e){
-    var t = e.target;
-    while(['X-TASK','BODY'].indexOf(t.nodeName)==-1){
-      t = t.parentNode;
-    }
-    if (t.nodeName == 'X-TASK'){
-      t.setAttribute('template','task-edit');
-    }
-  });
-
-  Hammer(appbar.children[1]).on('hold', function(e){
-    console.log('header hold');
   });
 
 </script>

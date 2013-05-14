@@ -87,10 +87,6 @@ x-modal[overlay] {
   box-shadow: 0 0 10000px 10000px rgba(0, 0, 0, 0.5);
 }
 
-
-x-panel {
-	display: block;
-}
 x-shiftbox {
 	display: block;
 	position: relative;

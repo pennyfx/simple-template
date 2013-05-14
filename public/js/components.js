@@ -1,3271 +1,284 @@
-/*global setImmediate: false, setTimeout: false, console: false */
-(function () {
 
-    var async = {};
-
-    // global on the server, window in the browser
-    var root, previous_async;
-
-    root = this;
-    if (root != null) {
-      previous_async = root.async;
-    }
-
-    async.noConflict = function () {
-        root.async = previous_async;
-        return async;
-    };
-
-    function only_once(fn) {
-        var called = false;
-        return function() {
-            if (called) throw new Error("Callback was already called.");
-            called = true;
-            fn.apply(root, arguments);
-        }
-    }
-
-    //// cross-browser compatiblity functions ////
-
-    var _each = function (arr, iterator) {
-        if (arr.forEach) {
-            return arr.forEach(iterator);
-        }
-        for (var i = 0; i < arr.length; i += 1) {
-            iterator(arr[i], i, arr);
-        }
-    };
-
-    var _map = function (arr, iterator) {
-        if (arr.map) {
-            return arr.map(iterator);
-        }
-        var results = [];
-        _each(arr, function (x, i, a) {
-            results.push(iterator(x, i, a));
-        });
-        return results;
-    };
-
-    var _reduce = function (arr, iterator, memo) {
-        if (arr.reduce) {
-            return arr.reduce(iterator, memo);
-        }
-        _each(arr, function (x, i, a) {
-            memo = iterator(memo, x, i, a);
-        });
-        return memo;
-    };
-
-    var _keys = function (obj) {
-        if (Object.keys) {
-            return Object.keys(obj);
-        }
-        var keys = [];
-        for (var k in obj) {
-            if (obj.hasOwnProperty(k)) {
-                keys.push(k);
-            }
-        }
-        return keys;
-    };
-
-    //// exported async module functions ////
-
-    //// nextTick implementation with browser-compatible fallback ////
-    if (typeof process === 'undefined' || !(process.nextTick)) {
-        if (typeof setImmediate === 'function') {
-            async.setImmediate = setImmediate;
-            async.nextTick = setImmediate;
-        }
-        else {
-            async.nextTick = function (fn) {
-                setTimeout(fn, 0);
-            };
-            async.setImmediate = async.nextTick;
-        }
-    }
-    else {
-        async.nextTick = process.nextTick;
-        if (typeof setImmediate !== 'undefined') {
-            async.setImmediate = setImmediate;
-        }
-        else {
-            async.setImmediate = async.nextTick;
-        }
-    }
-
-    async.each = function (arr, iterator, callback) {
-        callback = callback || function () {};
-        if (!arr.length) {
-            return callback();
-        }
-        var completed = 0;
-        _each(arr, function (x) {
-            iterator(x, only_once(function (err) {
-                if (err) {
-                    callback(err);
-                    callback = function () {};
-                }
-                else {
-                    completed += 1;
-                    if (completed >= arr.length) {
-                        callback(null);
-                    }
-                }
-            }));
-        });
-    };
-    async.forEach = async.each;
-
-    async.eachSeries = function (arr, iterator, callback) {
-        callback = callback || function () {};
-        if (!arr.length) {
-            return callback();
-        }
-        var completed = 0;
-        var iterate = function () {
-            iterator(arr[completed], function (err) {
-                if (err) {
-                    callback(err);
-                    callback = function () {};
-                }
-                else {
-                    completed += 1;
-                    if (completed >= arr.length) {
-                        callback(null);
-                    }
-                    else {
-                        iterate();
-                    }
-                }
-            });
-        };
-        iterate();
-    };
-    async.forEachSeries = async.eachSeries;
-
-    async.eachLimit = function (arr, limit, iterator, callback) {
-        var fn = _eachLimit(limit);
-        fn.apply(null, [arr, iterator, callback]);
-    };
-    async.forEachLimit = async.eachLimit;
-
-    var _eachLimit = function (limit) {
-
-        return function (arr, iterator, callback) {
-            callback = callback || function () {};
-            if (!arr.length || limit <= 0) {
-                return callback();
-            }
-            var completed = 0;
-            var started = 0;
-            var running = 0;
-
-            (function replenish () {
-                if (completed >= arr.length) {
-                    return callback();
-                }
-
-                while (running < limit && started < arr.length) {
-                    started += 1;
-                    running += 1;
-                    iterator(arr[started - 1], function (err) {
-                        if (err) {
-                            callback(err);
-                            callback = function () {};
-                        }
-                        else {
-                            completed += 1;
-                            running -= 1;
-                            if (completed >= arr.length) {
-                                callback();
-                            }
-                            else {
-                                replenish();
-                            }
-                        }
-                    });
-                }
-            })();
-        };
-    };
-
-
-    var doParallel = function (fn) {
-        return function () {
-            var args = Array.prototype.slice.call(arguments);
-            return fn.apply(null, [async.each].concat(args));
-        };
-    };
-    var doParallelLimit = function(limit, fn) {
-        return function () {
-            var args = Array.prototype.slice.call(arguments);
-            return fn.apply(null, [_eachLimit(limit)].concat(args));
-        };
-    };
-    var doSeries = function (fn) {
-        return function () {
-            var args = Array.prototype.slice.call(arguments);
-            return fn.apply(null, [async.eachSeries].concat(args));
-        };
-    };
-
-
-    var _asyncMap = function (eachfn, arr, iterator, callback) {
-        var results = [];
-        arr = _map(arr, function (x, i) {
-            return {index: i, value: x};
-        });
-        eachfn(arr, function (x, callback) {
-            iterator(x.value, function (err, v) {
-                results[x.index] = v;
-                callback(err);
-            });
-        }, function (err) {
-            callback(err, results);
-        });
-    };
-    async.map = doParallel(_asyncMap);
-    async.mapSeries = doSeries(_asyncMap);
-    async.mapLimit = function (arr, limit, iterator, callback) {
-        return _mapLimit(limit)(arr, iterator, callback);
-    };
-
-    var _mapLimit = function(limit) {
-        return doParallelLimit(limit, _asyncMap);
-    };
-
-    // reduce only has a series version, as doing reduce in parallel won't
-    // work in many situations.
-    async.reduce = function (arr, memo, iterator, callback) {
-        async.eachSeries(arr, function (x, callback) {
-            iterator(memo, x, function (err, v) {
-                memo = v;
-                callback(err);
-            });
-        }, function (err) {
-            callback(err, memo);
-        });
-    };
-    // inject alias
-    async.inject = async.reduce;
-    // foldl alias
-    async.foldl = async.reduce;
-
-    async.reduceRight = function (arr, memo, iterator, callback) {
-        var reversed = _map(arr, function (x) {
-            return x;
-        }).reverse();
-        async.reduce(reversed, memo, iterator, callback);
-    };
-    // foldr alias
-    async.foldr = async.reduceRight;
-
-    var _filter = function (eachfn, arr, iterator, callback) {
-        var results = [];
-        arr = _map(arr, function (x, i) {
-            return {index: i, value: x};
-        });
-        eachfn(arr, function (x, callback) {
-            iterator(x.value, function (v) {
-                if (v) {
-                    results.push(x);
-                }
-                callback();
-            });
-        }, function (err) {
-            callback(_map(results.sort(function (a, b) {
-                return a.index - b.index;
-            }), function (x) {
-                return x.value;
-            }));
-        });
-    };
-    async.filter = doParallel(_filter);
-    async.filterSeries = doSeries(_filter);
-    // select alias
-    async.select = async.filter;
-    async.selectSeries = async.filterSeries;
-
-    var _reject = function (eachfn, arr, iterator, callback) {
-        var results = [];
-        arr = _map(arr, function (x, i) {
-            return {index: i, value: x};
-        });
-        eachfn(arr, function (x, callback) {
-            iterator(x.value, function (v) {
-                if (!v) {
-                    results.push(x);
-                }
-                callback();
-            });
-        }, function (err) {
-            callback(_map(results.sort(function (a, b) {
-                return a.index - b.index;
-            }), function (x) {
-                return x.value;
-            }));
-        });
-    };
-    async.reject = doParallel(_reject);
-    async.rejectSeries = doSeries(_reject);
-
-    var _detect = function (eachfn, arr, iterator, main_callback) {
-        eachfn(arr, function (x, callback) {
-            iterator(x, function (result) {
-                if (result) {
-                    main_callback(x);
-                    main_callback = function () {};
-                }
-                else {
-                    callback();
-                }
-            });
-        }, function (err) {
-            main_callback();
-        });
-    };
-    async.detect = doParallel(_detect);
-    async.detectSeries = doSeries(_detect);
-
-    async.some = function (arr, iterator, main_callback) {
-        async.each(arr, function (x, callback) {
-            iterator(x, function (v) {
-                if (v) {
-                    main_callback(true);
-                    main_callback = function () {};
-                }
-                callback();
-            });
-        }, function (err) {
-            main_callback(false);
-        });
-    };
-    // any alias
-    async.any = async.some;
-
-    async.every = function (arr, iterator, main_callback) {
-        async.each(arr, function (x, callback) {
-            iterator(x, function (v) {
-                if (!v) {
-                    main_callback(false);
-                    main_callback = function () {};
-                }
-                callback();
-            });
-        }, function (err) {
-            main_callback(true);
-        });
-    };
-    // all alias
-    async.all = async.every;
-
-    async.sortBy = function (arr, iterator, callback) {
-        async.map(arr, function (x, callback) {
-            iterator(x, function (err, criteria) {
-                if (err) {
-                    callback(err);
-                }
-                else {
-                    callback(null, {value: x, criteria: criteria});
-                }
-            });
-        }, function (err, results) {
-            if (err) {
-                return callback(err);
-            }
-            else {
-                var fn = function (left, right) {
-                    var a = left.criteria, b = right.criteria;
-                    return a < b ? -1 : a > b ? 1 : 0;
-                };
-                callback(null, _map(results.sort(fn), function (x) {
-                    return x.value;
-                }));
-            }
-        });
-    };
-
-    async.auto = function (tasks, callback) {
-        callback = callback || function () {};
-        var keys = _keys(tasks);
-        if (!keys.length) {
-            return callback(null);
-        }
-
-        var results = {};
-
-        var listeners = [];
-        var addListener = function (fn) {
-            listeners.unshift(fn);
-        };
-        var removeListener = function (fn) {
-            for (var i = 0; i < listeners.length; i += 1) {
-                if (listeners[i] === fn) {
-                    listeners.splice(i, 1);
-                    return;
-                }
-            }
-        };
-        var taskComplete = function () {
-            _each(listeners.slice(0), function (fn) {
-                fn();
-            });
-        };
-
-        addListener(function () {
-            if (_keys(results).length === keys.length) {
-                callback(null, results);
-                callback = function () {};
-            }
-        });
-
-        _each(keys, function (k) {
-            var task = (tasks[k] instanceof Function) ? [tasks[k]]: tasks[k];
-            var taskCallback = function (err) {
-                var args = Array.prototype.slice.call(arguments, 1);
-                if (args.length <= 1) {
-                    args = args[0];
-                }
-                if (err) {
-                    var safeResults = {};
-                    _each(_keys(results), function(rkey) {
-                        safeResults[rkey] = results[rkey];
-                    });
-                    safeResults[k] = args;
-                    callback(err, safeResults);
-                    // stop subsequent errors hitting callback multiple times
-                    callback = function () {};
-                }
-                else {
-                    results[k] = args;
-                    async.setImmediate(taskComplete);
-                }
-            };
-            var requires = task.slice(0, Math.abs(task.length - 1)) || [];
-            var ready = function () {
-                return _reduce(requires, function (a, x) {
-                    return (a && results.hasOwnProperty(x));
-                }, true) && !results.hasOwnProperty(k);
-            };
-            if (ready()) {
-                task[task.length - 1](taskCallback, results);
-            }
-            else {
-                var listener = function () {
-                    if (ready()) {
-                        removeListener(listener);
-                        task[task.length - 1](taskCallback, results);
-                    }
-                };
-                addListener(listener);
-            }
-        });
-    };
-
-    async.waterfall = function (tasks, callback) {
-        callback = callback || function () {};
-        if (tasks.constructor !== Array) {
-          var err = new Error('First argument to waterfall must be an array of functions');
-          return callback(err);
-        }
-        if (!tasks.length) {
-            return callback();
-        }
-        var wrapIterator = function (iterator) {
-            return function (err) {
-                if (err) {
-                    callback.apply(null, arguments);
-                    callback = function () {};
-                }
-                else {
-                    var args = Array.prototype.slice.call(arguments, 1);
-                    var next = iterator.next();
-                    if (next) {
-                        args.push(wrapIterator(next));
-                    }
-                    else {
-                        args.push(callback);
-                    }
-                    async.setImmediate(function () {
-                        iterator.apply(null, args);
-                    });
-                }
-            };
-        };
-        wrapIterator(async.iterator(tasks))();
-    };
-
-    var _parallel = function(eachfn, tasks, callback) {
-        callback = callback || function () {};
-        if (tasks.constructor === Array) {
-            eachfn.map(tasks, function (fn, callback) {
-                if (fn) {
-                    fn(function (err) {
-                        var args = Array.prototype.slice.call(arguments, 1);
-                        if (args.length <= 1) {
-                            args = args[0];
-                        }
-                        callback.call(null, err, args);
-                    });
-                }
-            }, callback);
-        }
-        else {
-            var results = {};
-            eachfn.each(_keys(tasks), function (k, callback) {
-                tasks[k](function (err) {
-                    var args = Array.prototype.slice.call(arguments, 1);
-                    if (args.length <= 1) {
-                        args = args[0];
-                    }
-                    results[k] = args;
-                    callback(err);
-                });
-            }, function (err) {
-                callback(err, results);
-            });
-        }
-    };
-
-    async.parallel = function (tasks, callback) {
-        _parallel({ map: async.map, each: async.each }, tasks, callback);
-    };
-
-    async.parallelLimit = function(tasks, limit, callback) {
-        _parallel({ map: _mapLimit(limit), each: _eachLimit(limit) }, tasks, callback);
-    };
-
-    async.series = function (tasks, callback) {
-        callback = callback || function () {};
-        if (tasks.constructor === Array) {
-            async.mapSeries(tasks, function (fn, callback) {
-                if (fn) {
-                    fn(function (err) {
-                        var args = Array.prototype.slice.call(arguments, 1);
-                        if (args.length <= 1) {
-                            args = args[0];
-                        }
-                        callback.call(null, err, args);
-                    });
-                }
-            }, callback);
-        }
-        else {
-            var results = {};
-            async.eachSeries(_keys(tasks), function (k, callback) {
-                tasks[k](function (err) {
-                    var args = Array.prototype.slice.call(arguments, 1);
-                    if (args.length <= 1) {
-                        args = args[0];
-                    }
-                    results[k] = args;
-                    callback(err);
-                });
-            }, function (err) {
-                callback(err, results);
-            });
-        }
-    };
-
-    async.iterator = function (tasks) {
-        var makeCallback = function (index) {
-            var fn = function () {
-                if (tasks.length) {
-                    tasks[index].apply(null, arguments);
-                }
-                return fn.next();
-            };
-            fn.next = function () {
-                return (index < tasks.length - 1) ? makeCallback(index + 1): null;
-            };
-            return fn;
-        };
-        return makeCallback(0);
-    };
-
-    async.apply = function (fn) {
-        var args = Array.prototype.slice.call(arguments, 1);
-        return function () {
-            return fn.apply(
-                null, args.concat(Array.prototype.slice.call(arguments))
-            );
-        };
-    };
-
-    var _concat = function (eachfn, arr, fn, callback) {
-        var r = [];
-        eachfn(arr, function (x, cb) {
-            fn(x, function (err, y) {
-                r = r.concat(y || []);
-                cb(err);
-            });
-        }, function (err) {
-            callback(err, r);
-        });
-    };
-    async.concat = doParallel(_concat);
-    async.concatSeries = doSeries(_concat);
-
-    async.whilst = function (test, iterator, callback) {
-        if (test()) {
-            iterator(function (err) {
-                if (err) {
-                    return callback(err);
-                }
-                async.whilst(test, iterator, callback);
-            });
-        }
-        else {
-            callback();
-        }
-    };
-
-    async.doWhilst = function (iterator, test, callback) {
-        iterator(function (err) {
-            if (err) {
-                return callback(err);
-            }
-            if (test()) {
-                async.doWhilst(iterator, test, callback);
-            }
-            else {
-                callback();
-            }
-        });
-    };
-
-    async.until = function (test, iterator, callback) {
-        if (!test()) {
-            iterator(function (err) {
-                if (err) {
-                    return callback(err);
-                }
-                async.until(test, iterator, callback);
-            });
-        }
-        else {
-            callback();
-        }
-    };
-
-    async.doUntil = function (iterator, test, callback) {
-        iterator(function (err) {
-            if (err) {
-                return callback(err);
-            }
-            if (!test()) {
-                async.doUntil(iterator, test, callback);
-            }
-            else {
-                callback();
-            }
-        });
-    };
-
-    async.queue = function (worker, concurrency) {
-        if (concurrency === undefined) {
-            concurrency = 1;
-        }
-        function _insert(q, data, pos, callback) {
-          if(data.constructor !== Array) {
-              data = [data];
-          }
-          _each(data, function(task) {
-              var item = {
-                  data: task,
-                  callback: typeof callback === 'function' ? callback : null
-              };
-
-              if (pos) {
-                q.tasks.unshift(item);
-              } else {
-                q.tasks.push(item);
-              }
-
-              if (q.saturated && q.tasks.length === concurrency) {
-                  q.saturated();
-              }
-              async.setImmediate(q.process);
-          });
-        }
-
-        var workers = 0;
-        var q = {
-            tasks: [],
-            concurrency: concurrency,
-            saturated: null,
-            empty: null,
-            drain: null,
-            push: function (data, callback) {
-              _insert(q, data, false, callback);
-            },
-            unshift: function (data, callback) {
-              _insert(q, data, true, callback);
-            },
-            process: function () {
-                if (workers < q.concurrency && q.tasks.length) {
-                    var task = q.tasks.shift();
-                    if (q.empty && q.tasks.length === 0) {
-                        q.empty();
-                    }
-                    workers += 1;
-                    var next = function () {
-                        workers -= 1;
-                        if (task.callback) {
-                            task.callback.apply(task, arguments);
-                        }
-                        if (q.drain && q.tasks.length + workers === 0) {
-                            q.drain();
-                        }
-                        q.process();
-                    };
-                    var cb = only_once(next);
-                    worker(task.data, cb);
-                }
-            },
-            length: function () {
-                return q.tasks.length;
-            },
-            running: function () {
-                return workers;
-            }
-        };
-        return q;
-    };
-
-    async.cargo = function (worker, payload) {
-        var working     = false,
-            tasks       = [];
-
-        var cargo = {
-            tasks: tasks,
-            payload: payload,
-            saturated: null,
-            empty: null,
-            drain: null,
-            push: function (data, callback) {
-                if(data.constructor !== Array) {
-                    data = [data];
-                }
-                _each(data, function(task) {
-                    tasks.push({
-                        data: task,
-                        callback: typeof callback === 'function' ? callback : null
-                    });
-                    if (cargo.saturated && tasks.length === payload) {
-                        cargo.saturated();
-                    }
-                });
-                async.setImmediate(cargo.process);
-            },
-            process: function process() {
-                if (working) return;
-                if (tasks.length === 0) {
-                    if(cargo.drain) cargo.drain();
-                    return;
-                }
-
-                var ts = typeof payload === 'number'
-                            ? tasks.splice(0, payload)
-                            : tasks.splice(0);
-
-                var ds = _map(ts, function (task) {
-                    return task.data;
-                });
-
-                if(cargo.empty) cargo.empty();
-                working = true;
-                worker(ds, function () {
-                    working = false;
-
-                    var args = arguments;
-                    _each(ts, function (data) {
-                        if (data.callback) {
-                            data.callback.apply(null, args);
-                        }
-                    });
-
-                    process();
-                });
-            },
-            length: function () {
-                return tasks.length;
-            },
-            running: function () {
-                return working;
-            }
-        };
-        return cargo;
-    };
-
-    var _console_fn = function (name) {
-        return function (fn) {
-            var args = Array.prototype.slice.call(arguments, 1);
-            fn.apply(null, args.concat([function (err) {
-                var args = Array.prototype.slice.call(arguments, 1);
-                if (typeof console !== 'undefined') {
-                    if (err) {
-                        if (console.error) {
-                            console.error(err);
-                        }
-                    }
-                    else if (console[name]) {
-                        _each(args, function (x) {
-                            console[name](x);
-                        });
-                    }
-                }
-            }]));
-        };
-    };
-    async.log = _console_fn('log');
-    async.dir = _console_fn('dir');
-    /*async.info = _console_fn('info');
-    async.warn = _console_fn('warn');
-    async.error = _console_fn('error');*/
-
-    async.memoize = function (fn, hasher) {
-        var memo = {};
-        var queues = {};
-        hasher = hasher || function (x) {
-            return x;
-        };
-        var memoized = function () {
-            var args = Array.prototype.slice.call(arguments);
-            var callback = args.pop();
-            var key = hasher.apply(null, args);
-            if (key in memo) {
-                callback.apply(null, memo[key]);
-            }
-            else if (key in queues) {
-                queues[key].push(callback);
-            }
-            else {
-                queues[key] = [callback];
-                fn.apply(null, args.concat([function () {
-                    memo[key] = arguments;
-                    var q = queues[key];
-                    delete queues[key];
-                    for (var i = 0, l = q.length; i < l; i++) {
-                      q[i].apply(null, arguments);
-                    }
-                }]));
-            }
-        };
-        memoized.memo = memo;
-        memoized.unmemoized = fn;
-        return memoized;
-    };
-
-    async.unmemoize = function (fn) {
-      return function () {
-        return (fn.unmemoized || fn).apply(null, arguments);
-      };
-    };
-
-    async.times = function (count, iterator, callback) {
-        var counter = [];
-        for (var i = 0; i < count; i++) {
-            counter.push(i);
-        }
-        return async.map(counter, iterator, callback);
-    };
-
-    async.timesSeries = function (count, iterator, callback) {
-        var counter = [];
-        for (var i = 0; i < count; i++) {
-            counter.push(i);
-        }
-        return async.mapSeries(counter, iterator, callback);
-    };
-
-    async.compose = function (/* functions... */) {
-        var fns = Array.prototype.reverse.call(arguments);
-        return function () {
-            var that = this;
-            var args = Array.prototype.slice.call(arguments);
-            var callback = args.pop();
-            async.reduce(fns, args, function (newargs, fn, cb) {
-                fn.apply(that, newargs.concat([function () {
-                    var err = arguments[0];
-                    var nextargs = Array.prototype.slice.call(arguments, 1);
-                    cb(err, nextargs);
-                }]))
-            },
-            function (err, results) {
-                callback.apply(that, [err].concat(results));
-            });
-        };
-    };
-
-    var _applyEach = function (eachfn, fns /*args...*/) {
-        var go = function () {
-            var that = this;
-            var args = Array.prototype.slice.call(arguments);
-            var callback = args.pop();
-            return eachfn(fns, function (fn, cb) {
-                fn.apply(that, args.concat([cb]));
-            },
-            callback);
-        };
-        if (arguments.length > 2) {
-            var args = Array.prototype.slice.call(arguments, 2);
-            return go.apply(this, args);
-        }
-        else {
-            return go;
-        }
-    };
-    async.applyEach = doParallel(_applyEach);
-    async.applyEachSeries = doSeries(_applyEach);
-
-    async.forever = function (fn, callback) {
-        function next(err) {
-            if (err) {
-                if (callback) {
-                    return callback(err);
-                }
-                throw err;
-            }
-            fn(next);
-        }
-        next();
-    };
-
-    // AMD / RequireJS
-    if (typeof define !== 'undefined' && define.amd) {
-        define([], function () {
-            return async;
-        });
-    }
-    // Node.js
-    else if (typeof module !== 'undefined' && module.exports) {
-        module.exports = async;
-    }
-    // included directly via <script> tag
-    else {
-        root.async = async;
-    }
-
-}());
-
-(function ( window , undefined ) {
-    'use strict';
-    var indexedDB = window.indexedDB || window.webkitIndexedDB || window.mozIndexedDB || window.oIndexedDB || window.msIndexedDB,
-        IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange,
-        transactionModes = {
-            readonly: 'readonly',
-            readwrite: 'readwrite'
-        };
-        
-    var hasOwn = Object.prototype.hasOwnProperty;
-
-    if ( !indexedDB ) {
-        throw 'IndexedDB required';
-    }
-
-    var CallbackList = function () {
-        var state,
-            list = [];
-
-        var exec = function ( context , args ) {
-            if ( list ) {
-                args = args || [];
-                state = state || [ context , args ];
-
-                for ( var i = 0 , il = list.length ; i < il ; i++ ) {
-                    list[ i ].apply( state[ 0 ] , state[ 1 ] );
-                }
-
-                list = [];
-            }
-        };
-
-        this.add = function () {
-            for ( var i = 0 , il = arguments.length ; i < il ; i ++ ) {
-                list.push( arguments[ i ] );
-            }
-
-            if ( state ) {
-                exec();
-            }
-
-            return this;
-        };
-
-        this.execute = function () {
-            exec( this , arguments );
-            return this;
-        };
-    };
-
-    var Deferred = function ( func ) {
-        var state = 'progress',
-            actions = [
-                [ 'resolve' , 'done' , new CallbackList() , 'resolved' ],
-                [ 'reject' , 'fail' , new CallbackList() , 'rejected' ],
-                [ 'notify' , 'progress' , new CallbackList() ],
-            ],
-            deferred = {},
-            promise = {
-                state: function () {
-                    return state;
-                },
-                then: function ( /* doneHandler , failedHandler , progressHandler */ ) {
-                    var handlers = arguments;
-
-                    return Deferred(function ( newDefer ) {
-                        actions.forEach(function ( action , i ) {
-                            var handler = handlers[ i ];
-
-                            deferred[ action[ 1 ] ]( typeof handler === 'function' ?
-                                function () {
-                                    var returned = handler.apply( this , arguments );
-
-                                    if ( returned && typeof returned.promise === 'function' ) {
-                                        returned.promise()
-                                            .done( newDefer.resolve )
-                                            .fail( newDefer.reject )
-                                            .progress( newDefer.notify );
-                                    }
-                                } : newDefer[ action[ 0 ] ]
-                            );
-                        });
-                    }).promise();
-                },
-                promise: function ( obj ) {
-                    if ( obj ) {
-                        Object.keys( promise )
-                            .forEach(function ( key ) {
-                                obj[ key ] = promise[ key ];
-                            });
-
-                        return obj;
-                    }
-                    return promise;
-                }
-            };
-
-        actions.forEach(function ( action , i ) {
-            var list = action[ 2 ],
-                actionState = action[ 3 ];
-
-            promise[ action[ 1 ] ] = list.add;
-
-            if ( actionState ) {
-                list.add(function () {
-                    state = actionState;
-                });
-            }
-
-            deferred[ action[ 0 ] ] = list.execute;
-        });
-
-        promise.promise( deferred );
-
-        if ( func ) {
-            func.call( deferred , deferred );
-        }
-
-        return deferred;
-    };
-
-    var Server = function ( db , name ) {
-        var that = this,
-            closed = false;
-
-        this.add = function( table ) {
-            if ( closed ) {
-                throw 'Database has been closed';
-            }
-
-            var records = [];
-            for (var i = 0; i < arguments.length - 1; i++) {
-                records[i] = arguments[i + 1];
-            }
-
-            var transaction = db.transaction( table , transactionModes.readwrite ),
-                store = transaction.objectStore( table ),
-                deferred = Deferred();
-            
-            records.forEach( function ( record ) {
-                var req;
-                if ( record.item && record.key ) {
-                    var key = record.key;
-                    record = record.item;
-                    req = store.add( record , key );
-                } else {
-                    req = store.add( record );
-                }
-
-                req.onsuccess = function ( e ) {
-                    var target = e.target;
-                    var keyPath = target.source.keyPath;
-                    if ( keyPath === null ) {
-                        keyPath = '__id__';
-                    }
-                    Object.defineProperty( record , keyPath , {
-                        value: target.result,
-                        enumerable: true
-                    });
-                    deferred.notify();
-                };
-            } );
-            
-            transaction.oncomplete = function () {
-                deferred.resolve( records , that );
-            };
-            transaction.onerror = function ( e ) {
-                deferred.reject( records , e );
-            };
-            transaction.onabort = function ( e ) {
-                deferred.reject( records , e );
-            };
-            return deferred.promise();
-        };
-
-        this.update = function( table ) {
-            if ( closed ) {
-                throw 'Database has been closed';
-            }
-
-            var records = [];
-            for ( var i = 0 ; i < arguments.length - 1 ; i++ ) {
-                records[ i ] = arguments[ i + 1 ];
-            }
-
-            var transaction = db.transaction( table , transactionModes.readwrite ),
-                store = transaction.objectStore( table ),
-                keyPath = store.keyPath,
-                deferred = Deferred();
-
-            records.forEach( function ( record ) {
-                var req;
-                if ( record.item && record.key ) {
-                    var key = record.key;
-                    record = record.item;
-                    req = store.put( record , key );
-                } else {
-                    req = store.put( record );
-                }
-
-                req.onsuccess = function ( e ) {
-                    deferred.notify();
-                };
-            } );
-            
-            transaction.oncomplete = function () {
-                deferred.resolve( records , that );
-            };
-            transaction.onerror = function ( e ) {
-                deferred.reject( records , e );
-            };
-            transaction.onabort = function ( e ) {
-                deferred.reject( records , e );
-            };
-            return deferred.promise();
-        };
-        
-        this.remove = function ( table , key ) {
-            if ( closed ) {
-                throw 'Database has been closed';
-            }
-            var transaction = db.transaction( table , transactionModes.readwrite ),
-                store = transaction.objectStore( table ),
-                deferred = Deferred();
-            
-            var req = store.delete( key );
-            req.onsuccess = function ( ) {
-                deferred.resolve( key );
-            };
-            req.onerror = function ( e ) {
-                deferred.reject( e );
-            };
-            return deferred.promise();
-        };
-        
-        this.close = function ( ) {
-            if ( closed ) {
-                throw 'Database has been closed';
-            }
-            db.close();
-            closed = true;
-            delete dbCache[ name ];
-        };
-
-        this.get = function ( table , id ) {
-            if ( closed ) {
-                throw 'Database has been closed';
-            }
-            var transaction = db.transaction( table ),
-                store = transaction.objectStore( table ),
-                deferred = Deferred();
-
-            var req = store.get( id );
-            req.onsuccess = function ( e ) {
-                deferred.resolve( e.target.result );
-            };
-            req.onerror = function ( e ) {
-                deferred.reject( e );
-            };
-            return deferred.promise();
-        };
-
-        this.query = function ( table , index ) {
-            if ( closed ) {
-                throw 'Database has been closed';
-            }
-            return new IndexQuery( table , db , index );
-        };
-
-        for ( var i = 0 , il = db.objectStoreNames.length ; i < il ; i++ ) {
-            (function ( storeName ) {
-                that[ storeName ] = { };
-                for ( var i in that ) {
-                    if ( !hasOwn.call( that , i ) || i === 'close' ) {
-                        continue;
-                    }
-                    that[ storeName ][ i ] = (function ( i ) {
-                        return function () {
-                            var args = [ storeName ].concat( [].slice.call( arguments , 0 ) );
-                            return that[ i ].apply( that , args );
-                        };
-                    })( i );
-                }
-            })( db.objectStoreNames[ i ] );
-        }
-    };
-
-    var IndexQuery = function ( table , db , indexName ) {
-        var that = this;
-        var runQuery = function ( type, args , cursorType , direction ) {
-            var transaction = db.transaction( table ),
-                store = transaction.objectStore( table ),
-                index = indexName ? store.index( indexName ) : store,
-                keyRange = type ? IDBKeyRange[ type ].apply( null, args ) : null,
-                results = [],
-                deferred = Deferred(),
-                indexArgs = [ keyRange ];
-
-            if ( cursorType !== 'count' ) {
-                indexArgs.push( direction || 'next' );
-            };
-
-            index[cursorType].apply( index , indexArgs ).onsuccess = function ( e ) {
-                var cursor = e.target.result;
-
-                if ( typeof cursor === typeof 0 ) {
-                    results = cursor;
-                } else if ( cursor ) {
-                    results.push( 'value' in cursor ? cursor.value : cursor.key );
-                    cursor.continue();
-                }
-            };
-
-            transaction.oncomplete = function () {
-                deferred.resolve( results );
-            };
-            transaction.onerror = function ( e ) {
-                deferred.reject( e );
-            };
-            transaction.onabort = function ( e ) {
-                deferred.reject( e );
-            };
-            return deferred.promise();
-        };
-
-        var Query = function ( type , args ) {
-            var direction = 'next',
-                cursorType = 'openCursor',
-                filters = [],
-                unique = false;
-
-            var execute = function () {
-                var deferred = Deferred();
-                
-                runQuery( type , args , cursorType , unique ? direction + 'unique' : direction )
-                    .then( function ( data ) {
-                        if ( data.constructor === Array ) {
-                            filters.forEach( function ( filter ) {
-                                if ( !filter || !filter.length ) {
-                                    return;
-                                }
-
-                                if ( filter.length === 2 ) {
-                                    data = data.filter( function ( x ) {
-                                        return x[ filter[ 0 ] ] === filter[ 1 ];
-                                    });
-                                } else {
-                                    data = data.filter( filter[ 0 ] );
-                                }
-                            });
-                        }
-                        deferred.resolve( data );
-                    }, deferred.reject , deferred.notify );
-                ;
-
-                return deferred.promise();
-            };
-            var count = function () {
-                direction = null;
-                cursorType = 'count';
-
-                return {
-                    execute: execute
-                };
-            };
-            var keys = function () {
-                cursorType = 'openKeyCursor';
-
-                return {
-                    desc: desc,
-                    execute: execute,
-                    filter: filter,
-                    distinct: distinct
-                };
-            };
-            var filter = function ( ) {
-                filters.push( Array.prototype.slice.call( arguments , 0 , 2 ) );
-
-                return {
-                    keys: keys,
-                    execute: execute,
-                    filter: filter,
-                    desc: desc,
-                    distinct: distinct
-                };
-            };
-            var desc = function () {
-                direction = 'prev';
-
-                return {
-                    keys: keys,
-                    execute: execute,
-                    filter: filter,
-                    distinct: distinct
-                };
-            };
-            var distinct = function () {
-                unique = true;
-                return {
-                    keys: keys,
-                    count: count,
-                    execute: execute,
-                    filter: filter,
-                    desc: desc
-                };
-            };
-
-            return {
-                execute: execute,
-                count: count,
-                keys: keys,
-                filter: filter,
-                desc: desc,
-                distinct: distinct
-            };
-        };
-        
-        'only bound upperBound lowerBound'.split(' ').forEach(function (name) {
-            that[name] = function () {
-                return new Query( name , arguments );
-            };
-        });
-
-        this.filter = function () {
-            var query = new Query( null , null );
-            return query.filter.apply( query , arguments );
-        };
-
-        this.all = function () {
-            return this.filter();
-        };
-    };
-    
-    var createSchema = function ( e , schema , db ) {
-        if ( typeof schema === 'function' ) {
-            schema = schema();
-        }
-        
-        for ( var tableName in schema ) {
-            var table = schema[ tableName ];
-            if ( !hasOwn.call( schema , tableName ) ) {
-                continue;
-            }
-
-            var store = db.createObjectStore( tableName , table.key );
-
-            for ( var indexKey in table.indexes ) {
-                var index = table.indexes[ indexKey ];
-                store.createIndex( indexKey , index.key || indexKey , Object.keys(index).length ? index : { unique: false } );
-            }
-        }
-    };
-    
-    var open = function ( e , server , version , schema ) {
-        var db = e.target.result;
-        var s = new Server( db , server );
-        var upgrade;
-
-        var deferred = Deferred();
-        deferred.resolve( s );
-        dbCache[ server ] = db;
-
-        return deferred.promise();
-    };
-
-    var dbCache = {};
-
-    var db = {
-        version: '0.8.0',
-        open: function ( options ) {
-            var request;
-
-            var deferred = Deferred();
-
-            if ( dbCache[ options.server ] ) {
-                open( {
-                    target: {
-                        result: dbCache[ options.server ]
-                    }
-                } , options.server , options.version , options.schema )
-                .done(deferred.resolve)
-                .fail(deferred.reject)
-                .progress(deferred.notify);
-            } else {
-                request = indexedDB.open( options.server , options.version );
-                            
-                request.onsuccess = function ( e ) {
-                    open( e , options.server , options.version , options.schema )
-                        .done(deferred.resolve)
-                        .fail(deferred.reject)
-                        .progress(deferred.notify);
-                };
-            
-                request.onupgradeneeded = function ( e ) {
-                    createSchema( e , options.schema , e.target.result );
-                };
-                request.onerror = function ( e ) {
-                    deferred.reject( e );
-                };
-            }
-
-            return deferred.promise();
-        }
-    };
-    if ( typeof define === 'function' && define.amd ) {
-        define( function() { return db; } );
-    } else {
-        window.db = db;
-    }
-})( window );
-
-
-if (!(document.register || {}).__polyfill__){
-
-  (function(){
-    
-    var win = window,
-      doc = document,
-      tags = {},
-      tokens = [],
-      domready = false,
-      mutation = win.MutationObserver || win.WebKitMutationObserver ||  win.MozMutationObserver,
-      _createElement = doc.createElement,
-      register = function(name, options){
-        name = name.toLowerCase();
-        var base,
-            token = name,
-            options = options || {};
-            
-        if (!options.prototype) {
-          throw new Error('Missing required prototype property for registration of the ' + name + ' element');
-        }
-        
-        if (options.prototype && !('setAttribute' in options.prototype)) {
-          throw new TypeError("Unexpected prototype for " + name + " element - custom element prototypes must inherit from the Element interface");
-        }
-        
-        if (options.extends){
-          var ancestor = (tags[options.extends] || _createElement.call(doc, options.extends)).constructor;
-          if (ancestor != (win.HTMLUnknownElement || win.HTMLElement)) {
-            base = options.extends;
-            token = '[is="' + name + '"]';
-          }
-        }
-        
-        tokens.push(token);
-        
-        var tag = tags[name] = {
-              base: base,
-              'constructor': function(){
-                return doc.createElement(name);
-              },
-              _prototype: doc.__proto__ ? null : unwrapPrototype(options.prototype),
-              'prototype': options.prototype
-            };
-        
-        tag.constructor.prototype = tag.prototype;
-        
-        if (domready) query(doc, name).forEach(function(element){
-          upgrade(element, true);
-        });
-        
-        return tag.constructor;
-      };
-    
-    function unwrapPrototype(proto){
-      var definition = {},
-          names = Object.getOwnPropertyNames(proto),
-          index = names.length;
-      if (index) while (index--) {
-        definition[names[index]] = Object.getOwnPropertyDescriptor(proto, names[index]);
+(function(){
+  
+  var win = window,
+    doc = document,
+    tags = {},
+    tokens = [],
+    domready = false,
+    mutation = win.MutationObserver || win.WebKitMutationObserver ||  win.MozMutationObserver,
+    _createElement = doc.createElement,
+    register = function(name, options){
+      name = name.toLowerCase();
+      var base,
+          token = name,
+          options = options || {};
+          
+      if (!options.prototype) {
+        throw new Error('Missing required prototype property for registration of the ' + name + ' element');
       }
-      return definition;
-    }
-    
-    function typeOf(obj) {
-      return ({}).toString.call(obj).match(/\s([a-zA-Z]+)/)[1].toLowerCase();
-    }
-    
-    function clone(item, type){
-      var fn = clone[type || typeOf(item)];
-      return fn ? fn(item) : item;
-    }
-      clone.object = function(src){
-        var obj = {};
-        for (var key in src) obj[key] = clone(src[key]);
-        return obj;
-      };
-      clone.array = function(src){
-        var i = src.length, array = new Array(i);
-        while (i--) array[i] = clone(src[i]);
-        return array;
-      };
-    
-    var unsliceable = ['number', 'boolean', 'string', 'function'];
-    function toArray(obj){
-      return unsliceable.indexOf(typeof obj) == -1 ? 
-      Array.prototype.slice.call(obj, 0) :
-      [obj];
-    }
-    
-    function query(element, selector){
-      return element && selector && selector.length ? toArray(element.querySelectorAll(selector)) : [];
-    }
-    
-    function getTag(element){
-      return element.getAttribute ? tags[element.getAttribute('is') || element.nodeName.toLowerCase()] : false;
-    }
-    
-    function manipulate(element, fn){
-      var next = element.nextSibling,
-        parent = element.parentNode,
-        frag = doc.createDocumentFragment(),
-        returned = fn.call(frag.appendChild(element), frag) || element;
-      if (next){
-        parent.insertBefore(returned, next);
+      
+      if (options.prototype && !('setAttribute' in options.prototype)) {
+        throw new TypeError("Unexpected prototype for " + name + " element - custom element prototypes must inherit from the Element interface");
       }
-      else{
-        parent.appendChild(returned);
-      }
-    }
-    
-    function upgrade(element){
-      if (!element._elementupgraded) {
-        var tag = getTag(element);
-        if (tag) {
-          if (doc.__proto__) element.__proto__ = tag.prototype;
-          else Object.defineProperties(element, tag._prototype);
-          element.constructor = tag.constructor;
-          element._elementupgraded = true;
-          if (element.readyCallback) element.readyCallback.call(element, tag.prototype);
+      
+      if (options.extends){
+        var ancestor = (tags[options.extends] || _createElement.call(doc, options.extends)).constructor;
+        if (ancestor != (win.HTMLUnknownElement || win.HTMLElement)) {
+          base = options.extends;
+          token = '[is="' + name + '"]';
         }
       }
+      
+      if (tokens.indexOf(token) == -1) tokens.push(token);
+      
+      var tag = tags[name] = {
+        base: base,
+        'constructor': function(){
+          return doc.createElement(name);
+        },
+        _prototype: doc.__proto__ ? null : unwrapPrototype(options.prototype),
+        'prototype': options.prototype
+      };
+      
+      tag.constructor.prototype = tag.prototype;
+      
+      if (domready) query(doc, name).forEach(function(element){
+        upgrade(element, true);
+      });
+      
+      return tag.constructor;
+    };
+  
+  function unwrapPrototype(proto){
+    var definition = {},
+        names = Object.getOwnPropertyNames(proto),
+        index = names.length;
+    if (index) while (index--) {
+      definition[names[index]] = Object.getOwnPropertyDescriptor(proto, names[index]);
     }
-    
-    function inserted(element, event){
+    return definition;
+  }
+  
+  var typeObj = {};
+  function typeOf(obj) {
+    return typeObj.toString.call(obj).match(/\s([a-zA-Z]+)/)[1].toLowerCase();
+  }
+  
+  function clone(item, type){
+    var fn = clone[type || typeOf(item)];
+    return fn ? fn(item) : item;
+  }
+    clone.object = function(src){
+      var obj = {};
+      for (var key in src) obj[key] = clone(src[key]);
+      return obj;
+    };
+    clone.array = function(src){
+      var i = src.length, array = new Array(i);
+      while (i--) array[i] = clone(src[i]);
+      return array;
+    };
+  
+  var unsliceable = ['number', 'boolean', 'string', 'function'];
+  function toArray(obj){
+    return unsliceable.indexOf(typeOf(obj)) == -1 ? 
+    Array.prototype.slice.call(obj, 0) :
+    [obj];
+  }
+  
+  function query(element, selector){
+    return element && selector && selector.length ? toArray(element.querySelectorAll(selector)) : [];
+  }
+  
+  function getTag(element){
+    return element.getAttribute ? tags[element.getAttribute('is') || element.nodeName.toLowerCase()] : false;
+  }
+  
+  function manipulate(element, fn){
+    var next = element.nextSibling,
+      parent = element.parentNode,
+      frag = doc.createDocumentFragment(),
+      returned = fn.call(frag.appendChild(element), frag) || element;
+    if (next){
+      parent.insertBefore(returned, next);
+    }
+    else{
+      parent.appendChild(returned);
+    }
+  }
+  
+  function upgrade(element){
+    if (!element._elementupgraded) {
       var tag = getTag(element);
-      if (tag){
-        if (!element._elementupgraded) upgrade(element);
-        else {
-          if (doc.documentElement.contains(element) && element.insertedCallback) {
-            element.insertedCallback.call(element);
-          }
-          insertChildren(element);
-        }
-      }
-      else insertChildren(element);
-    }
-
-    function insertChildren(element){
-      if (element.childNodes.length) query(element, tokens).forEach(function(el){
-        if (!el._elementupgraded) upgrade(el);
-        if (el.insertedCallback) el.insertedCallback.call(el);
-      });
-    }
-    
-    function removed(element){
-      if (element._elementupgraded) {
-        if (element.removedCallback) element.removedCallback.call(element);
-        if (element.childNodes.length) query(element, tokens).forEach(function(el){
-          removed(el);
-        });
+      if (tag) {
+        if (doc.__proto__) element.__proto__ = tag.prototype;
+        else Object.defineProperties(element, tag._prototype);
+        element.constructor = tag.constructor;
+        element._elementupgraded = true;
+        if (element.readyCallback) element.readyCallback.call(element, tag.prototype);
       }
     }
-    
-    function addObserver(element, type, fn){
-      if (!element._records) {
-        element._records = { inserted: [], removed: [] };
-        if (mutation){
-          element._observer = new mutation(function(mutations) {
-            parseMutations(element, mutations);
-          });
-          element._observer.observe(element, {
-            subtree: true,
-            childList: true,
-            attributes: !true,
-            characterData: false
-          });
+  }
+  
+  function inserted(element, event){
+    var tag = getTag(element);
+    if (tag){
+      if (!element._elementupgraded) upgrade(element);
+      else {
+        if (doc.documentElement.contains(element) && element.insertedCallback) {
+          element.insertedCallback.call(element);
         }
-        else ['Inserted', 'Removed'].forEach(function(type){
-          element.addEventListener('DOMNode' + type, function(event){
-            event._mutation = true;
-            element._records[type.toLowerCase()].forEach(function(fn){
-              fn(event.target, event);
-            });
-          }, false);
-        });
-      }
-      if (element._records[type].indexOf(fn) == -1) element._records[type].push(fn);
-    }
-    
-    function removeObserver(element, type, fn){
-      var obj = element._records;
-      if (obj && fn){
-        obj[type].splice(obj[type].indexOf(fn), 1);
-      }
-      else{
-        obj[type] = [];
+        insertChildren(element);
       }
     }
-      
-    function parseMutations(element, mutations) {
-      var diff = { added: [], removed: [] };
-      mutations.forEach(function(record){
-        record._mutation = true;
-        for (var z in diff) {
-          var type = element._records[(z == 'added') ? 'inserted' : 'removed'],
-            nodes = record[z + 'Nodes'], length = nodes.length;
-          for (var i = 0; i < length && diff[z].indexOf(nodes[i]) == -1; i++){
-            diff[z].push(nodes[i]);
-            type.forEach(function(fn){
-              fn(nodes[i], record);
-            });
-          }
-        }
-      });
-    }
-      
-    function fireEvent(element, type, data, options){
-      options = options || {};
-      var event = doc.createEvent('Event');
-      event.initEvent(type, 'bubbles' in options ? options.bubbles : true, 'cancelable' in options ? options.cancelable : true);
-      for (var z in data) event[z] = data[z];
-      element.dispatchEvent(event);
-    }
+    else insertChildren(element);
+  }
 
-    var polyfill = !doc.register;
-    if (polyfill) {
-      doc.register = register;
-      
-      doc.createElement = function createElement(tag){
-        var base = tags[tag] ? tags[tag].base : null;
-            element = _createElement.call(doc, base || tag);
-        if (base) element.setAttribute('is', tag);
-        upgrade(element);
-        return element;
-      };
-      
-      var _setAttribute = Element.prototype.setAttribute;   
-      Element.prototype.setAttribute = function(attr, value, skip){
-        var tag = getTag(this),
-            last = this.getAttribute(attr);
-        _setAttribute.call(this, attr, value);
-        if (tag && last != this.getAttribute(attr)) {
-          if (this.attributeChangedCallback) this.attributeChangedCallback.call(this, attr, value, last, skip);
-        } 
-      };
-      
-      var initialize = function (){
-        addObserver(doc.documentElement, 'inserted', inserted);
-        addObserver(doc.documentElement, 'removed', removed);
-        
-        if (tokens.length) query(doc, tokens).forEach(function(element){
-          upgrade(element);
-        });
-        
-        domready = true;
-        fireEvent(doc, 'WebComponentsReady');
-        fireEvent(doc, 'DOMComponentsLoaded');
-        fireEvent(doc, '__DOMComponentsLoaded__');
-      };
-      
-      if (doc.readyState == 'complete') initialize();
-      else doc.addEventListener(doc.readyState == 'interactive' ? 'readystatechange' : 'DOMContentLoaded', initialize); 
-    }
-    
-    doc.register.__polyfill__ = {
-      query: query,
-      clone: clone,
-      typeOf: typeOf,
-      toArray: toArray,
-      fireEvent: fireEvent,
-      manipulate: manipulate,
-      addObserver: addObserver,
-      removeObserver: removeObserver,
-      observerElement: doc.documentElement,
-      parseMutations: parseMutations,
-      _inserted: inserted,
-      _createElement: _createElement,
-      _polyfilled: polyfill
-    };
-
-  })();
-
-}
-
-/*! Hammer.JS - v1.0.5 - 2013-04-07
- * http://eightmedia.github.com/hammer.js
- *
- * Copyright (c) 2013 Jorik Tangelder <j.tangelder@gmail.com>;
- * Licensed under the MIT license */
-
-(function(window, undefined) {
-    'use strict';
-
-/**
- * Hammer
- * use this to create instances
- * @param   {HTMLElement}   element
- * @param   {Object}        options
- * @returns {Hammer.Instance}
- * @constructor
- */
-var Hammer = function(element, options) {
-    return new Hammer.Instance(element, options || {});
-};
-
-// default settings
-Hammer.defaults = {
-    // add styles and attributes to the element to prevent the browser from doing
-    // its native behavior. this doesnt prevent the scrolling, but cancels
-    // the contextmenu, tap highlighting etc
-    // set to false to disable this
-    stop_browser_behavior: {
-		// this also triggers onselectstart=false for IE
-        userSelect: 'none',
-		// this makes the element blocking in IE10 >, you could experiment with the value
-		// see for more options this issue; https://github.com/EightMedia/hammer.js/issues/241
-        touchAction: 'none',
-		touchCallout: 'none',
-        contentZooming: 'none',
-        userDrag: 'none',
-        tapHighlightColor: 'rgba(0,0,0,0)'
-    }
-
-    // more settings are defined per gesture at gestures.js
-};
-
-// detect touchevents
-Hammer.HAS_POINTEREVENTS = navigator.pointerEnabled || navigator.msPointerEnabled;
-Hammer.HAS_TOUCHEVENTS = ('ontouchstart' in window);
-
-// dont use mouseevents on mobile devices
-Hammer.MOBILE_REGEX = /mobile|tablet|ip(ad|hone|od)|android/i;
-Hammer.NO_MOUSEEVENTS = Hammer.HAS_TOUCHEVENTS && navigator.userAgent.match(Hammer.MOBILE_REGEX);
-
-// eventtypes per touchevent (start, move, end)
-// are filled by Hammer.event.determineEventTypes on setup
-Hammer.EVENT_TYPES = {};
-
-// direction defines
-Hammer.DIRECTION_DOWN = 'down';
-Hammer.DIRECTION_LEFT = 'left';
-Hammer.DIRECTION_UP = 'up';
-Hammer.DIRECTION_RIGHT = 'right';
-
-// pointer type
-Hammer.POINTER_MOUSE = 'mouse';
-Hammer.POINTER_TOUCH = 'touch';
-Hammer.POINTER_PEN = 'pen';
-
-// touch event defines
-Hammer.EVENT_START = 'start';
-Hammer.EVENT_MOVE = 'move';
-Hammer.EVENT_END = 'end';
-
-// hammer document where the base events are added at
-Hammer.DOCUMENT = document;
-
-// plugins namespace
-Hammer.plugins = {};
-
-// if the window events are set...
-Hammer.READY = false;
-
-/**
- * setup events to detect gestures on the document
- */
-function setup() {
-    if(Hammer.READY) {
-        return;
-    }
-
-    // find what eventtypes we add listeners to
-    Hammer.event.determineEventTypes();
-
-    // Register all gestures inside Hammer.gestures
-    for(var name in Hammer.gestures) {
-        if(Hammer.gestures.hasOwnProperty(name)) {
-            Hammer.detection.register(Hammer.gestures[name]);
-        }
-    }
-
-    // Add touch events on the document
-    Hammer.event.onTouch(Hammer.DOCUMENT, Hammer.EVENT_MOVE, Hammer.detection.detect);
-    Hammer.event.onTouch(Hammer.DOCUMENT, Hammer.EVENT_END, Hammer.detection.detect);
-
-    // Hammer is ready...!
-    Hammer.READY = true;
-}
-
-/**
- * create new hammer instance
- * all methods should return the instance itself, so it is chainable.
- * @param   {HTMLElement}       element
- * @param   {Object}            [options={}]
- * @returns {Hammer.Instance}
- * @constructor
- */
-Hammer.Instance = function(element, options) {
-    var self = this;
-
-    // setup HammerJS window events and register all gestures
-    // this also sets up the default options
-    setup();
-
-    this.element = element;
-
-    // start/stop detection option
-    this.enabled = true;
-
-    // merge options
-    this.options = Hammer.utils.extend(
-        Hammer.utils.extend({}, Hammer.defaults),
-        options || {});
-
-    // add some css to the element to prevent the browser from doing its native behavoir
-    if(this.options.stop_browser_behavior) {
-        Hammer.utils.stopDefaultBrowserBehavior(this.element, this.options.stop_browser_behavior);
-    }
-
-    // start detection on touchstart
-    Hammer.event.onTouch(element, Hammer.EVENT_START, function(ev) {
-        if(self.enabled) {
-            Hammer.detection.startDetect(self, ev);
-        }
+  function insertChildren(element){
+    if (element.childNodes.length) query(element, tokens).forEach(function(el){
+      if (!el._elementupgraded) upgrade(el);
+      if (el.insertedCallback) el.insertedCallback.call(el);
     });
-
-    // return instance
-    return this;
-};
-
-
-Hammer.Instance.prototype = {
-    /**
-     * bind events to the instance
-     * @param   {String}      gesture
-     * @param   {Function}    handler
-     * @returns {Hammer.Instance}
-     */
-    on: function onEvent(gesture, handler){
-        var gestures = gesture.split(' ');
-        for(var t=0; t<gestures.length; t++) {
-            this.element.addEventListener(gestures[t], handler, false);
-        }
-        return this;
-    },
-
-
-    /**
-     * unbind events to the instance
-     * @param   {String}      gesture
-     * @param   {Function}    handler
-     * @returns {Hammer.Instance}
-     */
-    off: function offEvent(gesture, handler){
-        var gestures = gesture.split(' ');
-        for(var t=0; t<gestures.length; t++) {
-            this.element.removeEventListener(gestures[t], handler, false);
-        }
-        return this;
-    },
-
-
-    /**
-     * trigger gesture event
-     * @param   {String}      gesture
-     * @param   {Object}      eventData
-     * @returns {Hammer.Instance}
-     */
-    trigger: function triggerEvent(gesture, eventData){
-        // create DOM event
-        var event = Hammer.DOCUMENT.createEvent('Event');
-		event.initEvent(gesture, true, true);
-		event.gesture = eventData;
-
-        // trigger on the target if it is in the instance element,
-        // this is for event delegation tricks
-        var element = this.element;
-        if(Hammer.utils.hasParent(eventData.target, element)) {
-            element = eventData.target;
-        }
-
-        element.dispatchEvent(event);
-        return this;
-    },
-
-
-    /**
-     * enable of disable hammer.js detection
-     * @param   {Boolean}   state
-     * @returns {Hammer.Instance}
-     */
-    enable: function enable(state) {
-        this.enabled = state;
-        return this;
+  }
+  
+  function removed(element){
+    if (element._elementupgraded) {
+      if (element.removedCallback) element.removedCallback.call(element);
+      if (element.childNodes.length) query(element, tokens).forEach(function(el){
+        removed(el);
+      });
     }
-};
-
-/**
- * this holds the last move event,
- * used to fix empty touchend issue
- * see the onTouch event for an explanation
- * @type {Object}
- */
-var last_move_event = null;
-
-
-/**
- * when the mouse is hold down, this is true
- * @type {Boolean}
- */
-var enable_detect = false;
-
-
-/**
- * when touch events have been fired, this is true
- * @type {Boolean}
- */
-var touch_triggered = false;
-
-
-Hammer.event = {
-    /**
-     * simple addEventListener
-     * @param   {HTMLElement}   element
-     * @param   {String}        type
-     * @param   {Function}      handler
-     */
-    bindDom: function(element, type, handler) {
-        var types = type.split(' ');
-        for(var t=0; t<types.length; t++) {
-            element.addEventListener(types[t], handler, false);
-        }
-    },
-
-
-    /**
-     * touch events with mouse fallback
-     * @param   {HTMLElement}   element
-     * @param   {String}        eventType        like Hammer.EVENT_MOVE
-     * @param   {Function}      handler
-     */
-    onTouch: function onTouch(element, eventType, handler) {
-		var self = this;
-
-        this.bindDom(element, Hammer.EVENT_TYPES[eventType], function bindDomOnTouch(ev) {
-            var sourceEventType = ev.type.toLowerCase();
-
-            // onmouseup, but when touchend has been fired we do nothing.
-            // this is for touchdevices which also fire a mouseup on touchend
-            if(sourceEventType.match(/mouse/) && touch_triggered) {
-                return;
-            }
-
-            // mousebutton must be down or a touch event
-            else if( sourceEventType.match(/touch/) ||   // touch events are always on screen
-                sourceEventType.match(/pointerdown/) || // pointerevents touch
-                (sourceEventType.match(/mouse/) && ev.which === 1)   // mouse is pressed
-            ){
-                enable_detect = true;
-            }
-
-            // we are in a touch event, set the touch triggered bool to true,
-            // this for the conflicts that may occur on ios and android
-            if(sourceEventType.match(/touch|pointer/)) {
-                touch_triggered = true;
-            }
-
-            // count the total touches on the screen
-            var count_touches = 0;
-
-            // when touch has been triggered in this detection session
-            // and we are now handling a mouse event, we stop that to prevent conflicts
-            if(enable_detect) {
-                // update pointerevent
-                if(Hammer.HAS_POINTEREVENTS && eventType != Hammer.EVENT_END) {
-                    count_touches = Hammer.PointerEvent.updatePointer(eventType, ev);
-                }
-                // touch
-                else if(sourceEventType.match(/touch/)) {
-                    count_touches = ev.touches.length;
-                }
-                // mouse
-                else if(!touch_triggered) {
-                    count_touches = sourceEventType.match(/up/) ? 0 : 1;
-                }
-
-                // if we are in a end event, but when we remove one touch and
-                // we still have enough, set eventType to move
-                if(count_touches > 0 && eventType == Hammer.EVENT_END) {
-                    eventType = Hammer.EVENT_MOVE;
-                }
-                // no touches, force the end event
-                else if(!count_touches) {
-                    eventType = Hammer.EVENT_END;
-                }
-
-                // because touchend has no touches, and we often want to use these in our gestures,
-                // we send the last move event as our eventData in touchend
-                if(!count_touches && last_move_event !== null) {
-                    ev = last_move_event;
-                }
-                // store the last move event
-                else {
-                    last_move_event = ev;
-                }
-
-                // trigger the handler
-                handler.call(Hammer.detection, self.collectEventData(element, eventType, ev));
-
-                // remove pointerevent from list
-                if(Hammer.HAS_POINTEREVENTS && eventType == Hammer.EVENT_END) {
-                    count_touches = Hammer.PointerEvent.updatePointer(eventType, ev);
-                }
-            }
-
-            //debug(sourceEventType +" "+ eventType);
-
-            // on the end we reset everything
-            if(!count_touches) {
-                last_move_event = null;
-                enable_detect = false;
-                touch_triggered = false;
-                Hammer.PointerEvent.reset();
-            }
+  }
+  
+  function addObserver(element, type, fn){
+    if (!element._records) {
+      element._records = { inserted: [], removed: [] };
+      if (mutation){
+        element._observer = new mutation(function(mutations) {
+          parseMutations(element, mutations);
         });
-    },
-
-
-    /**
-     * we have different events for each device/browser
-     * determine what we need and set them in the Hammer.EVENT_TYPES constant
-     */
-    determineEventTypes: function determineEventTypes() {
-        // determine the eventtype we want to set
-        var types;
-
-        // pointerEvents magic
-        if(Hammer.HAS_POINTEREVENTS) {
-            types = Hammer.PointerEvent.getEvents();
-        }
-        // on Android, iOS, blackberry, windows mobile we dont want any mouseevents
-        else if(Hammer.NO_MOUSEEVENTS) {
-            types = [
-                'touchstart',
-                'touchmove',
-                'touchend touchcancel'];
-        }
-        // for non pointer events browsers and mixed browsers,
-        // like chrome on windows8 touch laptop
-        else {
-            types = [
-                'touchstart mousedown',
-                'touchmove mousemove',
-                'touchend touchcancel mouseup'];
-        }
-
-        Hammer.EVENT_TYPES[Hammer.EVENT_START]  = types[0];
-        Hammer.EVENT_TYPES[Hammer.EVENT_MOVE]   = types[1];
-        Hammer.EVENT_TYPES[Hammer.EVENT_END]    = types[2];
-    },
-
-
-    /**
-     * create touchlist depending on the event
-     * @param   {Object}    ev
-     * @param   {String}    eventType   used by the fakemultitouch plugin
-     */
-    getTouchList: function getTouchList(ev/*, eventType*/) {
-        // get the fake pointerEvent touchlist
-        if(Hammer.HAS_POINTEREVENTS) {
-            return Hammer.PointerEvent.getTouchList();
-        }
-        // get the touchlist
-        else if(ev.touches) {
-            return ev.touches;
-        }
-        // make fake touchlist from mouse position
-        else {
-            return [{
-                identifier: 1,
-                pageX: ev.pageX,
-                pageY: ev.pageY,
-                target: ev.target
-            }];
-        }
-    },
-
-
-    /**
-     * collect event data for Hammer js
-     * @param   {HTMLElement}   element
-     * @param   {String}        eventType        like Hammer.EVENT_MOVE
-     * @param   {Object}        eventData
-     */
-    collectEventData: function collectEventData(element, eventType, ev) {
-        var touches = this.getTouchList(ev, eventType);
-
-        // find out pointerType
-        var pointerType = Hammer.POINTER_TOUCH;
-        if(ev.type.match(/mouse/) || Hammer.PointerEvent.matchType(Hammer.POINTER_MOUSE, ev)) {
-            pointerType = Hammer.POINTER_MOUSE;
-        }
-
-        return {
-            center      : Hammer.utils.getCenter(touches),
-            timeStamp   : new Date().getTime(),
-            target      : ev.target,
-            touches     : touches,
-            eventType   : eventType,
-            pointerType : pointerType,
-            srcEvent    : ev,
-
-            /**
-             * prevent the browser default actions
-             * mostly used to disable scrolling of the browser
-             */
-            preventDefault: function() {
-                if(this.srcEvent.preventManipulation) {
-                    this.srcEvent.preventManipulation();
-                }
-
-                if(this.srcEvent.preventDefault) {
-                    this.srcEvent.preventDefault();
-                }
-            },
-
-            /**
-             * stop bubbling the event up to its parents
-             */
-            stopPropagation: function() {
-                this.srcEvent.stopPropagation();
-            },
-
-            /**
-             * immediately stop gesture detection
-             * might be useful after a swipe was detected
-             * @return {*}
-             */
-            stopDetect: function() {
-                return Hammer.detection.stopDetect();
-            }
-        };
-    }
-};
-
-Hammer.PointerEvent = {
-    /**
-     * holds all pointers
-     * @type {Object}
-     */
-    pointers: {},
-
-    /**
-     * get a list of pointers
-     * @returns {Array}     touchlist
-     */
-    getTouchList: function() {
-        var self = this;
-        var touchlist = [];
-
-        // we can use forEach since pointerEvents only is in IE10
-        Object.keys(self.pointers).sort().forEach(function(id) {
-            touchlist.push(self.pointers[id]);
+        element._observer.observe(element, {
+          subtree: true,
+          childList: true,
+          attributes: !true,
+          characterData: false
         });
-        return touchlist;
-    },
-
-    /**
-     * update the position of a pointer
-     * @param   {String}   type             Hammer.EVENT_END
-     * @param   {Object}   pointerEvent
-     */
-    updatePointer: function(type, pointerEvent) {
-        if(type == Hammer.EVENT_END) {
-            this.pointers = {};
-        }
-        else {
-            pointerEvent.identifier = pointerEvent.pointerId;
-            this.pointers[pointerEvent.pointerId] = pointerEvent;
-        }
-
-        return Object.keys(this.pointers).length;
-    },
-
-    /**
-     * check if ev matches pointertype
-     * @param   {String}        pointerType     Hammer.POINTER_MOUSE
-     * @param   {PointerEvent}  ev
-     */
-    matchType: function(pointerType, ev) {
-        if(!ev.pointerType) {
-            return false;
-        }
-
-        var types = {};
-        types[Hammer.POINTER_MOUSE] = (ev.pointerType == ev.MSPOINTER_TYPE_MOUSE || ev.pointerType == Hammer.POINTER_MOUSE);
-        types[Hammer.POINTER_TOUCH] = (ev.pointerType == ev.MSPOINTER_TYPE_TOUCH || ev.pointerType == Hammer.POINTER_TOUCH);
-        types[Hammer.POINTER_PEN] = (ev.pointerType == ev.MSPOINTER_TYPE_PEN || ev.pointerType == Hammer.POINTER_PEN);
-        return types[pointerType];
-    },
-
-
-    /**
-     * get events
-     */
-    getEvents: function() {
-        return [
-            'pointerdown MSPointerDown',
-            'pointermove MSPointerMove',
-            'pointerup pointercancel MSPointerUp MSPointerCancel'
-        ];
-    },
-
-    /**
-     * reset the list
-     */
-    reset: function() {
-        this.pointers = {};
+      }
+      else ['Inserted', 'Removed'].forEach(function(type){
+        element.addEventListener('DOMNode' + type, function(event){
+          event._mutation = true;
+          element._records[type.toLowerCase()].forEach(function(fn){
+            fn(event.target, event);
+          });
+        }, false);
+      });
     }
-};
-
-
-Hammer.utils = {
-    /**
-     * extend method,
-     * also used for cloning when dest is an empty object
-     * @param   {Object}    dest
-     * @param   {Object}    src
-	 * @parm	{Boolean}	merge		do a merge
-     * @returns {Object}    dest
-     */
-    extend: function extend(dest, src, merge) {
-        for (var key in src) {
-			if(dest[key] !== undefined && merge) {
-				continue;
-			}
-            dest[key] = src[key];
-        }
-        return dest;
-    },
-
-
-    /**
-     * find if a node is in the given parent
-     * used for event delegation tricks
-     * @param   {HTMLElement}   node
-     * @param   {HTMLElement}   parent
-     * @returns {boolean}       has_parent
-     */
-    hasParent: function(node, parent) {
-        while(node){
-            if(node == parent) {
-                return true;
-            }
-            node = node.parentNode;
-        }
-        return false;
-    },
-
-
-    /**
-     * get the center of all the touches
-     * @param   {Array}     touches
-     * @returns {Object}    center
-     */
-    getCenter: function getCenter(touches) {
-        var valuesX = [], valuesY = [];
-
-        for(var t= 0,len=touches.length; t<len; t++) {
-            valuesX.push(touches[t].pageX);
-            valuesY.push(touches[t].pageY);
-        }
-
-        return {
-            pageX: ((Math.min.apply(Math, valuesX) + Math.max.apply(Math, valuesX)) / 2),
-            pageY: ((Math.min.apply(Math, valuesY) + Math.max.apply(Math, valuesY)) / 2)
-        };
-    },
-
-
-    /**
-     * calculate the velocity between two points
-     * @param   {Number}    delta_time
-     * @param   {Number}    delta_x
-     * @param   {Number}    delta_y
-     * @returns {Object}    velocity
-     */
-    getVelocity: function getVelocity(delta_time, delta_x, delta_y) {
-        return {
-            x: Math.abs(delta_x / delta_time) || 0,
-            y: Math.abs(delta_y / delta_time) || 0
-        };
-    },
-
-
-    /**
-     * calculate the angle between two coordinates
-     * @param   {Touch}     touch1
-     * @param   {Touch}     touch2
-     * @returns {Number}    angle
-     */
-    getAngle: function getAngle(touch1, touch2) {
-        var y = touch2.pageY - touch1.pageY,
-            x = touch2.pageX - touch1.pageX;
-        return Math.atan2(y, x) * 180 / Math.PI;
-    },
-
-
-    /**
-     * angle to direction define
-     * @param   {Touch}     touch1
-     * @param   {Touch}     touch2
-     * @returns {String}    direction constant, like Hammer.DIRECTION_LEFT
-     */
-    getDirection: function getDirection(touch1, touch2) {
-        var x = Math.abs(touch1.pageX - touch2.pageX),
-            y = Math.abs(touch1.pageY - touch2.pageY);
-
-        if(x >= y) {
-            return touch1.pageX - touch2.pageX > 0 ? Hammer.DIRECTION_LEFT : Hammer.DIRECTION_RIGHT;
-        }
-        else {
-            return touch1.pageY - touch2.pageY > 0 ? Hammer.DIRECTION_UP : Hammer.DIRECTION_DOWN;
-        }
-    },
-
-
-    /**
-     * calculate the distance between two touches
-     * @param   {Touch}     touch1
-     * @param   {Touch}     touch2
-     * @returns {Number}    distance
-     */
-    getDistance: function getDistance(touch1, touch2) {
-        var x = touch2.pageX - touch1.pageX,
-            y = touch2.pageY - touch1.pageY;
-        return Math.sqrt((x*x) + (y*y));
-    },
-
-
-    /**
-     * calculate the scale factor between two touchLists (fingers)
-     * no scale is 1, and goes down to 0 when pinched together, and bigger when pinched out
-     * @param   {Array}     start
-     * @param   {Array}     end
-     * @returns {Number}    scale
-     */
-    getScale: function getScale(start, end) {
-        // need two fingers...
-        if(start.length >= 2 && end.length >= 2) {
-            return this.getDistance(end[0], end[1]) /
-                this.getDistance(start[0], start[1]);
-        }
-        return 1;
-    },
-
-
-    /**
-     * calculate the rotation degrees between two touchLists (fingers)
-     * @param   {Array}     start
-     * @param   {Array}     end
-     * @returns {Number}    rotation
-     */
-    getRotation: function getRotation(start, end) {
-        // need two fingers
-        if(start.length >= 2 && end.length >= 2) {
-            return this.getAngle(end[1], end[0]) -
-                this.getAngle(start[1], start[0]);
-        }
-        return 0;
-    },
-
-
-    /**
-     * boolean if the direction is vertical
-     * @param    {String}    direction
-     * @returns  {Boolean}   is_vertical
-     */
-    isVertical: function isVertical(direction) {
-        return (direction == Hammer.DIRECTION_UP || direction == Hammer.DIRECTION_DOWN);
-    },
-
-
-    /**
-     * stop browser default behavior with css props
-     * @param   {HtmlElement}   element
-     * @param   {Object}        css_props
-     */
-    stopDefaultBrowserBehavior: function stopDefaultBrowserBehavior(element, css_props) {
-        var prop,
-            vendors = ['webkit','khtml','moz','ms','o',''];
-
-        if(!css_props || !element.style) {
-            return;
-        }
-
-        // with css properties for modern browsers
-        for(var i = 0; i < vendors.length; i++) {
-            for(var p in css_props) {
-                if(css_props.hasOwnProperty(p)) {
-                    prop = p;
-
-                    // vender prefix at the property
-                    if(vendors[i]) {
-                        prop = vendors[i] + prop.substring(0, 1).toUpperCase() + prop.substring(1);
-                    }
-
-                    // set the style
-                    element.style[prop] = css_props[p];
-                }
-            }
-        }
-
-        // also the disable onselectstart
-        if(css_props.userSelect == 'none') {
-            element.onselectstart = function() {
-                return false;
-            };
-        }
+    if (element._records[type].indexOf(fn) == -1) element._records[type].push(fn);
+  }
+  
+  function removeObserver(element, type, fn){
+    var obj = element._records;
+    if (obj && fn){
+      obj[type].splice(obj[type].indexOf(fn), 1);
     }
-};
-
-Hammer.detection = {
-    // contains all registred Hammer.gestures in the correct order
-    gestures: [],
-
-    // data of the current Hammer.gesture detection session
-    current: null,
-
-    // the previous Hammer.gesture session data
-    // is a full clone of the previous gesture.current object
-    previous: null,
-
-    // when this becomes true, no gestures are fired
-    stopped: false,
-
-
-    /**
-     * start Hammer.gesture detection
-     * @param   {Hammer.Instance}   inst
-     * @param   {Object}            eventData
-     */
-    startDetect: function startDetect(inst, eventData) {
-        // already busy with a Hammer.gesture detection on an element
-        if(this.current) {
-            return;
-        }
-
-        this.stopped = false;
-
-        this.current = {
-            inst        : inst, // reference to HammerInstance we're working for
-            startEvent  : Hammer.utils.extend({}, eventData), // start eventData for distances, timing etc
-            lastEvent   : false, // last eventData
-            name        : '' // current gesture we're in/detected, can be 'tap', 'hold' etc
-        };
-
-        this.detect(eventData);
-    },
-
-
-    /**
-     * Hammer.gesture detection
-     * @param   {Object}    eventData
-     * @param   {Object}    eventData
-     */
-    detect: function detect(eventData) {
-        if(!this.current || this.stopped) {
-            return;
-        }
-
-        // extend event data with calculations about scale, distance etc
-        eventData = this.extendEventData(eventData);
-
-        // instance options
-        var inst_options = this.current.inst.options;
-
-        // call Hammer.gesture handlers
-        for(var g=0,len=this.gestures.length; g<len; g++) {
-            var gesture = this.gestures[g];
-
-            // only when the instance options have enabled this gesture
-            if(!this.stopped && inst_options[gesture.name] !== false) {
-                // if a handler returns false, we stop with the detection
-                if(gesture.handler.call(gesture, eventData, this.current.inst) === false) {
-                    this.stopDetect();
-                    break;
-                }
-            }
-        }
-
-        // store as previous event event
-        if(this.current) {
-            this.current.lastEvent = eventData;
-        }
-
-        // endevent, but not the last touch, so dont stop
-        if(eventData.eventType == Hammer.EVENT_END && !eventData.touches.length-1) {
-            this.stopDetect();
-        }
-
-        return eventData;
-    },
-
-
-    /**
-     * clear the Hammer.gesture vars
-     * this is called on endDetect, but can also be used when a final Hammer.gesture has been detected
-     * to stop other Hammer.gestures from being fired
-     */
-    stopDetect: function stopDetect() {
-        // clone current data to the store as the previous gesture
-        // used for the double tap gesture, since this is an other gesture detect session
-        this.previous = Hammer.utils.extend({}, this.current);
-
-        // reset the current
-        this.current = null;
-
-        // stopped!
-        this.stopped = true;
-    },
-
-
-    /**
-     * extend eventData for Hammer.gestures
-     * @param   {Object}   ev
-     * @returns {Object}   ev
-     */
-    extendEventData: function extendEventData(ev) {
-        var startEv = this.current.startEvent;
-
-        // if the touches change, set the new touches over the startEvent touches
-        // this because touchevents don't have all the touches on touchstart, or the
-        // user must place his fingers at the EXACT same time on the screen, which is not realistic
-        // but, sometimes it happens that both fingers are touching at the EXACT same time
-        if(startEv && (ev.touches.length != startEv.touches.length || ev.touches === startEv.touches)) {
-            // extend 1 level deep to get the touchlist with the touch objects
-            startEv.touches = [];
-            for(var i=0,len=ev.touches.length; i<len; i++) {
-                startEv.touches.push(Hammer.utils.extend({}, ev.touches[i]));
-            }
-        }
-
-        var delta_time = ev.timeStamp - startEv.timeStamp,
-            delta_x = ev.center.pageX - startEv.center.pageX,
-            delta_y = ev.center.pageY - startEv.center.pageY,
-            velocity = Hammer.utils.getVelocity(delta_time, delta_x, delta_y);
-
-        Hammer.utils.extend(ev, {
-            deltaTime   : delta_time,
-
-            deltaX      : delta_x,
-            deltaY      : delta_y,
-
-            velocityX   : velocity.x,
-            velocityY   : velocity.y,
-
-            distance    : Hammer.utils.getDistance(startEv.center, ev.center),
-            angle       : Hammer.utils.getAngle(startEv.center, ev.center),
-            direction   : Hammer.utils.getDirection(startEv.center, ev.center),
-
-            scale       : Hammer.utils.getScale(startEv.touches, ev.touches),
-            rotation    : Hammer.utils.getRotation(startEv.touches, ev.touches),
-
-            startEvent  : startEv
-        });
-
-        return ev;
-    },
-
-
-    /**
-     * register new gesture
-     * @param   {Object}    gesture object, see gestures.js for documentation
-     * @returns {Array}     gestures
-     */
-    register: function register(gesture) {
-        // add an enable gesture options if there is no given
-        var options = gesture.defaults || {};
-        if(options[gesture.name] === undefined) {
-            options[gesture.name] = true;
-        }
-
-        // extend Hammer default options with the Hammer.gesture options
-        Hammer.utils.extend(Hammer.defaults, options, true);
-
-        // set its index
-        gesture.index = gesture.index || 1000;
-
-        // add Hammer.gesture to the list
-        this.gestures.push(gesture);
-
-        // sort the list by index
-        this.gestures.sort(function(a, b) {
-            if (a.index < b.index) {
-                return -1;
-            }
-            if (a.index > b.index) {
-                return 1;
-            }
-            return 0;
-        });
-
-        return this.gestures;
+    else{
+      obj[type] = [];
     }
-};
-
-
-Hammer.gestures = Hammer.gestures || {};
-
-/**
- * Custom gestures
- * ==============================
- *
- * Gesture object
- * --------------------
- * The object structure of a gesture:
- *
- * { name: 'mygesture',
- *   index: 1337,
- *   defaults: {
- *     mygesture_option: true
- *   }
- *   handler: function(type, ev, inst) {
- *     // trigger gesture event
- *     inst.trigger(this.name, ev);
- *   }
- * }
-
- * @param   {String}    name
- * this should be the name of the gesture, lowercase
- * it is also being used to disable/enable the gesture per instance config.
- *
- * @param   {Number}    [index=1000]
- * the index of the gesture, where it is going to be in the stack of gestures detection
- * like when you build an gesture that depends on the drag gesture, it is a good
- * idea to place it after the index of the drag gesture.
- *
- * @param   {Object}    [defaults={}]
- * the default settings of the gesture. these are added to the instance settings,
- * and can be overruled per instance. you can also add the name of the gesture,
- * but this is also added by default (and set to true).
- *
- * @param   {Function}  handler
- * this handles the gesture detection of your custom gesture and receives the
- * following arguments:
- *
- *      @param  {Object}    eventData
- *      event data containing the following properties:
- *          timeStamp   {Number}        time the event occurred
- *          target      {HTMLElement}   target element
- *          touches     {Array}         touches (fingers, pointers, mouse) on the screen
- *          pointerType {String}        kind of pointer that was used. matches Hammer.POINTER_MOUSE|TOUCH
- *          center      {Object}        center position of the touches. contains pageX and pageY
- *          deltaTime   {Number}        the total time of the touches in the screen
- *          deltaX      {Number}        the delta on x axis we haved moved
- *          deltaY      {Number}        the delta on y axis we haved moved
- *          velocityX   {Number}        the velocity on the x
- *          velocityY   {Number}        the velocity on y
- *          angle       {Number}        the angle we are moving
- *          direction   {String}        the direction we are moving. matches Hammer.DIRECTION_UP|DOWN|LEFT|RIGHT
- *          distance    {Number}        the distance we haved moved
- *          scale       {Number}        scaling of the touches, needs 2 touches
- *          rotation    {Number}        rotation of the touches, needs 2 touches *
- *          eventType   {String}        matches Hammer.EVENT_START|MOVE|END
- *          srcEvent    {Object}        the source event, like TouchStart or MouseDown *
- *          startEvent  {Object}        contains the same properties as above,
- *                                      but from the first touch. this is used to calculate
- *                                      distances, deltaTime, scaling etc
- *
- *      @param  {Hammer.Instance}    inst
- *      the instance we are doing the detection for. you can get the options from
- *      the inst.options object and trigger the gesture event by calling inst.trigger
- *
- *
- * Handle gestures
- * --------------------
- * inside the handler you can get/set Hammer.detection.current. This is the current
- * detection session. It has the following properties
- *      @param  {String}    name
- *      contains the name of the gesture we have detected. it has not a real function,
- *      only to check in other gestures if something is detected.
- *      like in the drag gesture we set it to 'drag' and in the swipe gesture we can
- *      check if the current gesture is 'drag' by accessing Hammer.detection.current.name
- *
- *      @readonly
- *      @param  {Hammer.Instance}    inst
- *      the instance we do the detection for
- *
- *      @readonly
- *      @param  {Object}    startEvent
- *      contains the properties of the first gesture detection in this session.
- *      Used for calculations about timing, distance, etc.
- *
- *      @readonly
- *      @param  {Object}    lastEvent
- *      contains all the properties of the last gesture detect in this session.
- *
- * after the gesture detection session has been completed (user has released the screen)
- * the Hammer.detection.current object is copied into Hammer.detection.previous,
- * this is usefull for gestures like doubletap, where you need to know if the
- * previous gesture was a tap
- *
- * options that have been set by the instance can be received by calling inst.options
- *
- * You can trigger a gesture event by calling inst.trigger("mygesture", event).
- * The first param is the name of your gesture, the second the event argument
- *
- *
- * Register gestures
- * --------------------
- * When an gesture is added to the Hammer.gestures object, it is auto registered
- * at the setup of the first Hammer instance. You can also call Hammer.detection.register
- * manually and pass your gesture object as a param
- *
- */
-
-/**
- * Hold
- * Touch stays at the same place for x time
- * @events  hold
- */
-Hammer.gestures.Hold = {
-    name: 'hold',
-    index: 10,
-    defaults: {
-        hold_timeout	: 500,
-        hold_threshold	: 1
-    },
-    timer: null,
-    handler: function holdGesture(ev, inst) {
-        switch(ev.eventType) {
-            case Hammer.EVENT_START:
-                // clear any running timers
-                clearTimeout(this.timer);
-
-                // set the gesture so we can check in the timeout if it still is
-                Hammer.detection.current.name = this.name;
-
-                // set timer and if after the timeout it still is hold,
-                // we trigger the hold event
-                this.timer = setTimeout(function() {
-                    if(Hammer.detection.current.name == 'hold') {
-                        inst.trigger('hold', ev);
-                    }
-                }, inst.options.hold_timeout);
-                break;
-
-            // when you move or end we clear the timer
-            case Hammer.EVENT_MOVE:
-                if(ev.distance > inst.options.hold_threshold) {
-                    clearTimeout(this.timer);
-                }
-                break;
-
-            case Hammer.EVENT_END:
-                clearTimeout(this.timer);
-                break;
+  }
+    
+  function parseMutations(element, mutations) {
+    var diff = { added: [], removed: [] };
+    mutations.forEach(function(record){
+      record._mutation = true;
+      for (var z in diff) {
+        var type = element._records[(z == 'added') ? 'inserted' : 'removed'],
+          nodes = record[z + 'Nodes'], length = nodes.length;
+        for (var i = 0; i < length && diff[z].indexOf(nodes[i]) == -1; i++){
+          diff[z].push(nodes[i]);
+          type.forEach(function(fn){
+            fn(nodes[i], record);
+          });
         }
-    }
-};
+      }
+    });
+  }
+    
+  function fireEvent(element, type, data, options){
+    options = options || {};
+    var event = doc.createEvent('Event');
+    event.initEvent(type, 'bubbles' in options ? options.bubbles : true, 'cancelable' in options ? options.cancelable : true);
+    for (var z in data) event[z] = data[z];
+    element.dispatchEvent(event);
+  }
 
-
-/**
- * Tap/DoubleTap
- * Quick touch at a place or double at the same place
- * @events  tap, doubletap
- */
-Hammer.gestures.Tap = {
-    name: 'tap',
-    index: 100,
-    defaults: {
-        tap_max_touchtime	: 250,
-        tap_max_distance	: 10,
-		tap_always			: true,
-        doubletap_distance	: 20,
-        doubletap_interval	: 300
-    },
-    handler: function tapGesture(ev, inst) {
-        if(ev.eventType == Hammer.EVENT_END) {
-            // previous gesture, for the double tap since these are two different gesture detections
-            var prev = Hammer.detection.previous,
-				did_doubletap = false;
-
-            // when the touchtime is higher then the max touch time
-            // or when the moving distance is too much
-            if(ev.deltaTime > inst.options.tap_max_touchtime ||
-                ev.distance > inst.options.tap_max_distance) {
-                return;
-            }
-
-            // check if double tap
-            if(prev && prev.name == 'tap' &&
-                (ev.timeStamp - prev.lastEvent.timeStamp) < inst.options.doubletap_interval &&
-                ev.distance < inst.options.doubletap_distance) {
-				inst.trigger('doubletap', ev);
-				did_doubletap = true;
-            }
-
-			// do a single tap
-			if(!did_doubletap || inst.options.tap_always) {
-				Hammer.detection.current.name = 'tap';
-				inst.trigger(Hammer.detection.current.name, ev);
-			}
-        }
-    }
-};
-
-
-/**
- * Swipe
- * triggers swipe events when the end velocity is above the threshold
- * @events  swipe, swipeleft, swiperight, swipeup, swipedown
- */
-Hammer.gestures.Swipe = {
-    name: 'swipe',
-    index: 40,
-    defaults: {
-        // set 0 for unlimited, but this can conflict with transform
-        swipe_max_touches  : 1,
-        swipe_velocity     : 0.7
-    },
-    handler: function swipeGesture(ev, inst) {
-        if(ev.eventType == Hammer.EVENT_END) {
-            // max touches
-            if(inst.options.swipe_max_touches > 0 &&
-                ev.touches.length > inst.options.swipe_max_touches) {
-                return;
-            }
-
-            // when the distance we moved is too small we skip this gesture
-            // or we can be already in dragging
-            if(ev.velocityX > inst.options.swipe_velocity ||
-                ev.velocityY > inst.options.swipe_velocity) {
-                // trigger swipe events
-                inst.trigger(this.name, ev);
-                inst.trigger(this.name + ev.direction, ev);
-            }
-        }
-    }
-};
-
-
-/**
- * Drag
- * Move with x fingers (default 1) around on the page. Blocking the scrolling when
- * moving left and right is a good practice. When all the drag events are blocking
- * you disable scrolling on that area.
- * @events  drag, drapleft, dragright, dragup, dragdown
- */
-Hammer.gestures.Drag = {
-    name: 'drag',
-    index: 50,
-    defaults: {
-        drag_min_distance : 10,
-        // set 0 for unlimited, but this can conflict with transform
-        drag_max_touches  : 1,
-        // prevent default browser behavior when dragging occurs
-        // be careful with it, it makes the element a blocking element
-        // when you are using the drag gesture, it is a good practice to set this true
-        drag_block_horizontal   : false,
-        drag_block_vertical     : false,
-        // drag_lock_to_axis keeps the drag gesture on the axis that it started on,
-        // It disallows vertical directions if the initial direction was horizontal, and vice versa.
-        drag_lock_to_axis       : false,
-        // drag lock only kicks in when distance > drag_lock_min_distance
-        // This way, locking occurs only when the distance has become large enough to reliably determine the direction
-        drag_lock_min_distance : 25
-    },
-    triggered: false,
-    handler: function dragGesture(ev, inst) {
-        // current gesture isnt drag, but dragged is true
-        // this means an other gesture is busy. now call dragend
-        if(Hammer.detection.current.name != this.name && this.triggered) {
-            inst.trigger(this.name +'end', ev);
-            this.triggered = false;
-            return;
-        }
-
-        // max touches
-        if(inst.options.drag_max_touches > 0 &&
-            ev.touches.length > inst.options.drag_max_touches) {
-            return;
-        }
-
-        switch(ev.eventType) {
-            case Hammer.EVENT_START:
-                this.triggered = false;
-                break;
-
-            case Hammer.EVENT_MOVE:
-                // when the distance we moved is too small we skip this gesture
-                // or we can be already in dragging
-                if(ev.distance < inst.options.drag_min_distance &&
-                    Hammer.detection.current.name != this.name) {
-                    return;
-                }
-
-                // we are dragging!
-                Hammer.detection.current.name = this.name;
-
-                // lock drag to axis?
-                if(Hammer.detection.current.lastEvent.drag_locked_to_axis || (inst.options.drag_lock_to_axis && inst.options.drag_lock_min_distance<=ev.distance)) {
-                    ev.drag_locked_to_axis = true;
-                }
-                var last_direction = Hammer.detection.current.lastEvent.direction;
-                if(ev.drag_locked_to_axis && last_direction !== ev.direction) {
-                    // keep direction on the axis that the drag gesture started on
-                    if(Hammer.utils.isVertical(last_direction)) {
-                        ev.direction = (ev.deltaY < 0) ? Hammer.DIRECTION_UP : Hammer.DIRECTION_DOWN;
-                    }
-                    else {
-                        ev.direction = (ev.deltaX < 0) ? Hammer.DIRECTION_LEFT : Hammer.DIRECTION_RIGHT;
-                    }
-                }
-
-                // first time, trigger dragstart event
-                if(!this.triggered) {
-                    inst.trigger(this.name +'start', ev);
-                    this.triggered = true;
-                }
-
-                // trigger normal event
-                inst.trigger(this.name, ev);
-
-                // direction event, like dragdown
-                inst.trigger(this.name + ev.direction, ev);
-
-                // block the browser events
-                if( (inst.options.drag_block_vertical && Hammer.utils.isVertical(ev.direction)) ||
-                    (inst.options.drag_block_horizontal && !Hammer.utils.isVertical(ev.direction))) {
-                    ev.preventDefault();
-                }
-                break;
-
-            case Hammer.EVENT_END:
-                // trigger dragend
-                if(this.triggered) {
-                    inst.trigger(this.name +'end', ev);
-                }
-
-                this.triggered = false;
-                break;
-        }
-    }
-};
-
-
-/**
- * Transform
- * User want to scale or rotate with 2 fingers
- * @events  transform, pinch, pinchin, pinchout, rotate
- */
-Hammer.gestures.Transform = {
-    name: 'transform',
-    index: 45,
-    defaults: {
-        // factor, no scale is 1, zoomin is to 0 and zoomout until higher then 1
-        transform_min_scale     : 0.01,
-        // rotation in degrees
-        transform_min_rotation  : 1,
-        // prevent default browser behavior when two touches are on the screen
-        // but it makes the element a blocking element
-        // when you are using the transform gesture, it is a good practice to set this true
-        transform_always_block  : false
-    },
-    triggered: false,
-    handler: function transformGesture(ev, inst) {
-        // current gesture isnt drag, but dragged is true
-        // this means an other gesture is busy. now call dragend
-        if(Hammer.detection.current.name != this.name && this.triggered) {
-            inst.trigger(this.name +'end', ev);
-            this.triggered = false;
-            return;
-        }
-
-        // atleast multitouch
-        if(ev.touches.length < 2) {
-            return;
-        }
-
-        // prevent default when two fingers are on the screen
-        if(inst.options.transform_always_block) {
-            ev.preventDefault();
-        }
-
-        switch(ev.eventType) {
-            case Hammer.EVENT_START:
-                this.triggered = false;
-                break;
-
-            case Hammer.EVENT_MOVE:
-                var scale_threshold = Math.abs(1-ev.scale);
-                var rotation_threshold = Math.abs(ev.rotation);
-
-                // when the distance we moved is too small we skip this gesture
-                // or we can be already in dragging
-                if(scale_threshold < inst.options.transform_min_scale &&
-                    rotation_threshold < inst.options.transform_min_rotation) {
-                    return;
-                }
-
-                // we are transforming!
-                Hammer.detection.current.name = this.name;
-
-                // first time, trigger dragstart event
-                if(!this.triggered) {
-                    inst.trigger(this.name +'start', ev);
-                    this.triggered = true;
-                }
-
-                inst.trigger(this.name, ev); // basic transform event
-
-                // trigger rotate event
-                if(rotation_threshold > inst.options.transform_min_rotation) {
-                    inst.trigger('rotate', ev);
-                }
-
-                // trigger pinch event
-                if(scale_threshold > inst.options.transform_min_scale) {
-                    inst.trigger('pinch', ev);
-                    inst.trigger('pinch'+ ((ev.scale < 1) ? 'in' : 'out'), ev);
-                }
-                break;
-
-            case Hammer.EVENT_END:
-                // trigger dragend
-                if(this.triggered) {
-                    inst.trigger(this.name +'end', ev);
-                }
-
-                this.triggered = false;
-                break;
-        }
-    }
-};
-
-
-/**
- * Touch
- * Called as first, tells the user has touched the screen
- * @events  touch
- */
-Hammer.gestures.Touch = {
-    name: 'touch',
-    index: -Infinity,
-    defaults: {
-        // call preventDefault at touchstart, and makes the element blocking by
-        // disabling the scrolling of the page, but it improves gestures like
-        // transforming and dragging.
-        // be careful with using this, it can be very annoying for users to be stuck
-        // on the page
-        prevent_default: false,
-
-        // disable mouse events, so only touch (or pen!) input triggers events
-        prevent_mouseevents: false
-    },
-    handler: function touchGesture(ev, inst) {
-        if(inst.options.prevent_mouseevents && ev.pointerType == Hammer.POINTER_MOUSE) {
-            ev.stopDetect();
-            return;
-        }
-
-        if(inst.options.prevent_default) {
-            ev.preventDefault();
-        }
-
-        if(ev.eventType ==  Hammer.EVENT_START) {
-            inst.trigger(this.name, ev);
-        }
-    }
-};
-
-
-/**
- * Release
- * Called as last, tells the user has released the screen
- * @events  release
- */
-Hammer.gestures.Release = {
-    name: 'release',
-    index: Infinity,
-    handler: function releaseGesture(ev, inst) {
-        if(ev.eventType ==  Hammer.EVENT_END) {
-            inst.trigger(this.name, ev);
-        }
-    }
-};
-
-// node export
-if(typeof module === 'object' && typeof module.exports === 'object'){
-    module.exports = Hammer;
-}
-// just window export
-else {
-    window.Hammer = Hammer;
-
-    // requireJS module definition
-    if(typeof window.define === 'function' && window.define.amd) {
-        window.define('hammer', [], function() {
-            return Hammer;
-        });
-    }
-}
-})(this);
-
-(function($, undefined) {
-    'use strict';
-
-    // no jQuery or Zepto!
-    if($ === undefined) {
-        return;
-    }
-
-    /**
-     * bind dom events
-     * this overwrites addEventListener
-     * @param   {HTMLElement}   element
-     * @param   {String}        eventTypes
-     * @param   {Function}      handler
-     */
-    Hammer.event.bindDom = function(element, eventTypes, handler) {
-        $(element).on(eventTypes, function(ev) {
-            var data = ev.originalEvent || ev;
-
-            // IE pageX fix
-            if(data.pageX === undefined) {
-                data.pageX = ev.pageX;
-                data.pageY = ev.pageY;
-            }
-
-            // IE target fix
-            if(!data.target) {
-                data.target = ev.target;
-            }
-
-            // IE button fix
-            if(data.which === undefined) {
-                data.which = data.button;
-            }
-
-            // IE preventDefault
-            if(!data.preventDefault) {
-                data.preventDefault = ev.preventDefault;
-            }
-
-            // IE stopPropagation
-            if(!data.stopPropagation) {
-                data.stopPropagation = ev.stopPropagation;
-            }
-
-            handler.call(this, data);
-        });
+  var polyfill = !doc.register;
+  if (polyfill) {
+    doc.register = register;
+    
+    doc.createElement = function createElement(tag){
+      var base = tags[tag] ? tags[tag].base : null;
+          element = _createElement.call(doc, base || tag);
+      if (base) element.setAttribute('is', tag);
+      upgrade(element);
+      return element;
     };
-
-    /**
-     * the methods are called by the instance, but with the jquery plugin
-     * we use the jquery event methods instead.
-     * @this    {Hammer.Instance}
-     * @return  {jQuery}
-     */
-    Hammer.Instance.prototype.on = function(types, handler) {
-        return $(this.element).on(types, handler);
+    
+    function changeAttribute(attr, value, method){
+      var tag = getTag(this),
+          last = this.getAttribute(attr);
+      method.call(this, attr, value);
+      if (tag && last != this.getAttribute(attr)) {
+        if (this.attributeChangedCallback) this.attributeChangedCallback.call(this, attr, last);
+      } 
     };
-    Hammer.Instance.prototype.off = function(types, handler) {
-        return $(this.element).off(types, handler);
+    
+    var setAttr = Element.prototype.setAttribute;   
+    Element.prototype.setAttribute = function(attr, value){
+      changeAttribute.call(this, attr, value, setAttr);
     };
-
-
-    /**
-     * trigger events
-     * this is called by the gestures to trigger an event like 'tap'
-     * @this    {Hammer.Instance}
-     * @param   {String}    gesture
-     * @param   {Object}    eventData
-     * @return  {jQuery}
-     */
-    Hammer.Instance.prototype.trigger = function(gesture, eventData){
-        var el = $(this.element);
-        if(el.has(eventData.target).length) {
-            el = $(eventData.target);
-        }
-
-        return el.trigger({
-            type: gesture,
-            gesture: eventData
-        });
+    
+    removeAttr = Element.prototype.removeAttribute;   
+    Element.prototype.removeAttribute = function(attr, value){
+      changeAttribute.call(this, attr, value, removeAttr);
     };
-
-
-    /**
-     * jQuery plugin
-     * create instance of Hammer and watch for gestures,
-     * and when called again you can change the options
-     * @param   {Object}    [options={}]
-     * @return  {jQuery}
-     */
-    $.fn.hammer = function(options) {
-        return this.each(function() {
-            var el = $(this);
-            var inst = el.data('hammer');
-            // start new hammer instance
-            if(!inst) {
-                el.data('hammer', new Hammer(this, options || {}));
-            }
-            // change the options
-            else if(inst && options) {
-                Hammer.utils.extend(inst.options, options);
-            }
-        });
+    
+    var initialize = function (){
+      addObserver(doc.documentElement, 'inserted', inserted);
+      addObserver(doc.documentElement, 'removed', removed);
+      
+      if (tokens.length) query(doc, tokens).forEach(function(element){
+        upgrade(element);
+      });
+      
+      domready = true;
+      fireEvent(doc.body, 'WebComponentsReady');
+      fireEvent(doc.body, 'DOMComponentsLoaded');
+      fireEvent(doc.body, '__DOMComponentsLoaded__');
     };
+    
+    if (doc.readyState == 'complete') initialize();
+    else doc.addEventListener(doc.readyState == 'interactive' ? 'readystatechange' : 'DOMContentLoaded', initialize); 
+  }
+  
+  doc.register.__polyfill__ = {
+    query: query,
+    clone: clone,
+    typeOf: typeOf,
+    toArray: toArray,
+    fireEvent: fireEvent,
+    manipulate: manipulate,
+    addObserver: addObserver,
+    removeObserver: removeObserver,
+    observerElement: doc.documentElement,
+    _parseMutations: parseMutations,
+    _insertChildren: window.CustomElements ? window.CustomElements.upgradeAll : insertChildren,
+    _inserted: inserted,
+    _createElement: _createElement,
+    _polyfilled: polyfill || (window.CustomElements && !window.CustomElements.hasNative)
+  };
 
-})(window.jQuery || window.Zepto);
+})();
 
 (function () {
 
@@ -3273,6 +286,7 @@ else {
 
   var win = window,
     doc = document,
+    noop = function(){},
     regexPseudoSplit = /(\w+(?:\([^\)]+\))?)/g,
     regexPseudoReplace = /(\w*)(?:\(([^\)]*)\))?/,
     regexDigits = /(\d+)/g,
@@ -3304,7 +318,7 @@ else {
       var styles = win.getComputedStyle(doc.documentElement, ''),
           pre = (Array.prototype.slice
             .call(styles)
-            .join('') 
+            .join('')
             .match(/-(moz|webkit|ms)-/) || (styles.OLink === '' && ['', 'o'])
           )[1];
       return {
@@ -3316,18 +330,18 @@ else {
 
     })(),
     matchSelector = Element.prototype.matchesSelector || Element.prototype[prefix.lowercase + 'MatchesSelector'];
-  
+
 /*** Internal Functions ***/
 
   // Mixins
-  
+
   function mergeOne(source, key, current){
     var type = xtag.typeOf(current);
     if (type == 'object' && xtag.typeOf(source[key]) == 'object') xtag.merge(source[key], current);
     else source[key] = xtag.clone(current, type);
     return source;
   }
-  
+
   function mergeMixin(type, mixin, option) {
     var original = {};
     for (var o in option) original[o.split(':')[0]] = true;
@@ -3352,7 +366,59 @@ else {
     });
     return tag;
   }
-  
+
+  function attachProperties(tag, prop, z, accessor, attr, setter){
+    var key = z.split(':'), type = key[0];
+    if (type == 'get') {
+      key[0] = prop;
+      tag.prototype[prop].get = xtag.applyPseudos(key.join(':'), accessor[z], tag.pseudos);
+    }
+    else if (type == 'set') {
+      key[0] = prop;
+      tag.prototype[prop].set = xtag.applyPseudos(key.join(':'), attr ? function(value){
+        setter.call(this, value);
+        accessor[z].call(this, value);
+      } : accessor[z], tag.pseudos);
+    }
+    else tag.prototype[prop][z] = accessor[z];
+  }
+
+  function parseAccessor(tag, prop){
+    tag.prototype[prop] = {};
+    var accessor = tag.accessors[prop],
+        attr = accessor.attribute,
+        name = attr && attr.name ? attr.name.toLowerCase() : prop,
+        setter = null;
+
+    if (attr) {
+      tag.attributes[name] = attr;
+      tag.attributes[name].setter = prop;
+      setter = function(value){
+        var node = this.xtag.attributeNodes[name];
+        if (!node || (node != this && !node.parentNode)) {
+          node = this.xtag.attributeNodes[name] = attr.property ? this.xtag[attr.property] : attr.selector ? this.querySelector(attr.selector) : this;
+        }
+        var val = attr.boolean ? '' : value,
+            method = (attr.boolean && (value === false || value === null)) ? 'removeAttribute' : value === null ? 'removeAttribute' : 'setAttribute';
+        if (value != (attr.boolean ? this.hasAttribute(name) : this.getAttribute(name))) this[method](name, val);
+        if (node && node != this && (value != (attr.boolean ? node.hasAttribute(name) : node.getAttribute(name)))) node[method](name, val);
+      };
+    }
+
+    for (var z in accessor) attachProperties(tag, prop, z, accessor, attr, setter);
+
+    if (attr) {
+      if (!tag.prototype[prop].get) {
+        var method = (attr.boolean ? 'has' : 'get') + 'Attribute';
+        tag.prototype[prop].get = function(){
+          return this[method](name);
+        };
+      }
+      if (!tag.prototype[prop].set) tag.prototype[prop].set = setter;
+    }
+
+  }
+
 /*** X-Tag Object Definition ***/
 
   var xtag = {
@@ -3364,10 +430,11 @@ else {
       methods: {},
       accessors: {},
       lifecycle: {},
+      attributes: {},
       'prototype': {
         xtag: {
           get: function(){
-            return this.__xtag__ ? this.__xtag__ : (this.__xtag__ = { data: {} });
+            return this.__xtag__ ? this.__xtag__ : (this.__xtag__ = { data: {}, attributeNodes: {} });
           }
         }
       }
@@ -3375,64 +442,54 @@ else {
     register: function (name, options) {
       var _name = name.toLowerCase();
       var tag = xtag.tags[_name] = applyMixins(xtag.merge({}, xtag.defaultOptions, options));
-      xtag.attributeSetters[_name] = {};
-      
+
       for (var z in tag.events) tag.events[z] = xtag.parseEvent(z, tag.events[z]);
-      for (var z in tag.lifecycle) tag.lifecycle[z.split(':')[0]] = xtag.applyPseudos(z, tag.lifecycle[z], tag.pseudos);
-      for (var z in tag.methods) tag.prototype[z.split(':')[0]] = { value: xtag.applyPseudos(z, tag.methods[z], tag.pseudos) };
-      
-      for (var prop in tag.accessors) {
-        tag.prototype[prop] = {};
-        var accessor = tag.accessors[prop];
-        for (var z in accessor) {
-          var key = z.split(':'), type = key[0];
-          if (type == 'get' || type == 'set') {
-            key[0] = prop;
-            tag.prototype[prop][type] = xtag.applyPseudos(key.join(':'), accessor[z], tag.pseudos);
-          }
-          else tag.prototype[prop][z] = accessor[z];
-        }
-      }
-  
+      for (z in tag.lifecycle) tag.lifecycle[z.split(':')[0]] = xtag.applyPseudos(z, tag.lifecycle[z], tag.pseudos);
+      for (z in tag.methods) tag.prototype[z.split(':')[0]] = { value: xtag.applyPseudos(z, tag.methods[z], tag.pseudos) };
+      for (var prop in tag.accessors) parseAccessor(tag, prop);
+
       var attributeChanged = tag.lifecycle.attributeChanged;
       tag.prototype.attributeChangedCallback = {
-        value: function(attr, value, last, skip){
-          var setter = xtag.attributeSetters[_name][attr.toLowerCase()];
-          if (!skip && setter) this[setter] = value;
-          return attributeChanged ? attributeChanged.apply(this, xtag.toArray(arguments)) : null;
+        value: function(name, last){
+          var attr = tag.attributes[name.toLowerCase()] || {};
+          if (attr.setter) this[attr.setter] = attr.boolean ? this.hasAttribute(name) : this.getAttribute(name);
+          return attributeChanged ? attributeChanged.call(this, name, last) : null;
         }
-       };
+      };
 
       var ready = tag.lifecycle.created || tag.lifecycle.ready;
       tag.prototype.readyCallback = {
         value: function(){
           var element = this;
-          tag.pseudos.forEach(function(obj){
-            obj.onAdd.call(element, obj);
-          });
           xtag.addEvents(this, tag.events);
           tag.mixins.forEach(function(mixin){
             if (xtag.mixins[mixin].events) xtag.addEvents(element, xtag.mixins[mixin].events);
           });
-          return ready ? ready.apply(this, xtag.toArray(arguments)) : null;
+          var output = ready ? ready.apply(this, xtag.toArray(arguments)) : null;
+          for (var attr in tag.attributes) if (this.hasAttribute(attr)) {
+            this[tag.attributes[attr].setter] = tag.attributes[attr].boolean ? this.hasAttribute(attr) : this.getAttribute(attr);
+          }
+          tag.pseudos.forEach(function(obj){
+            obj.onAdd.call(element, obj);
+          });
+          return output;
         }
       };
-      
+
       if (tag.lifecycle.inserted) tag.prototype.insertedCallback = { value: tag.lifecycle.inserted };
       if (tag.lifecycle.removed) tag.prototype.removedCallback = { value: tag.lifecycle.removed };
-      
+
       var constructor = doc.register(_name, {
-        'extends': options.extends,
-        'prototype': Object.create((options.extends ? document.createElement(options.extends).constructor : win.HTMLElement).prototype, tag.prototype)
+        'extends': options['extends'],
+        'prototype': Object.create((options['extends'] ? document.createElement(options['extends']).constructor : win.HTMLElement).prototype, tag.prototype)
       });
-      
+
       return constructor;
     },
 
   /*** Exposed Variables ***/
     mixins: {},
     prefix: prefix,
-    attributeSetters: {},
     captureEvents: ['focus', 'blur'],
     customEvents: {
       overflow: createFlowEvent('over'),
@@ -3493,22 +550,13 @@ else {
         action: function (pseudo, event) {
           return !event.defaultPrevented;
         }
-      },
-      attribute: {
-        onAdd: function(pseudo){
-          var key = (pseudo.value || pseudo.key.split(':')[0]).toLowerCase();
-          xtag.attributeSetters[this.nodeName.toLowerCase()][key] = pseudo.key.split(':')[0];
-        },
-        action: function (pseudo, value) {
-          this.setAttribute(pseudo.value || pseudo.key.split(':')[0], value, true);
-        }
       }
     },
 
   /*** Utilities ***/
 
     // JS Types
-    
+
     wrap: function (original, fn) {
       return function () {
         var args = xtag.toArray(arguments),
@@ -3516,7 +564,7 @@ else {
         return returned === false ? false : fn.apply(this, typeof returned != 'undefined' ? xtag.toArray(returned) : args);
       };
     },
-    
+
     merge: function(source, k, v){
       if (xtag.typeOf(k) == 'string') return mergeOne(source, k, v);
       for (var i = 1, l = arguments.length; i < l; i++){
@@ -3529,33 +577,41 @@ else {
     skipTransition: function(element, fn, bind){
       var duration = prefix.js + 'TransitionDuration';
       element.style[duration] = '0.001s';
-      fn.call(bind);
-      xtag.addEvent(element, 'transitionend', function(){
-        element.style[duration] = '';
+      element.style.transitionDuration = '0.001s';
+      xtag.requestFrame(function(){
+        if (fn) fn.call(bind);
+        xtag.requestFrame(function(){
+          element.style[duration] = '';
+          element.style.transitionDuration = '';
+        });
       });
     },
-    
+
     requestFrame: (function(){
       var raf = win.requestAnimationFrame ||
         win[prefix.lowercase + 'RequestAnimationFrame'] ||
-        function(fn){ return win.setTimeout(fn, 20) };
-      return function(fn){ 
+        function(fn){ return win.setTimeout(fn, 20); };
+      return function(fn){
         return raf.call(win, fn);
-      }
+      };
     })(),
 
     matchSelector: function (element, selector) {
       return matchSelector.call(element, selector);
     },
-    
-    innerHTML: function (element, html) {
-      element.innerHTML = html;
+
+    set: function (element, method, value) {
+      element[method] = value;
       if (xtag._polyfilled) {
         if (xtag.observerElement._observer) {
-          xtag.parseMutations(xtag.observerElement, xtag.observerElement._observer.takeRecords());
+          xtag._parseMutations(xtag.observerElement, xtag.observerElement._observer.takeRecords());
         }
-        else xtag._inserted(element);
+        else xtag._insertChildren(element);
       }
+    },
+
+    innerHTML: function(el, html){
+      xtag.set(el, 'innerHTML', html);
     },
 
     hasClass: function (element, klass) {
@@ -3578,10 +634,12 @@ else {
       }).join(' ');
       return element;
     },
+
     toggleClass: function (element, klass) {
       return xtag[xtag.hasClass(element, klass) ? 'removeClass' : 'addClass'].call(null, element, klass);
 
     },
+
     query: function (element, selector) {
       return xtag.toArray(element.querySelectorAll(selector));
     },
@@ -3636,7 +694,11 @@ else {
               return obj.listener.apply(this, args);
             };
             if (element && pseudo.onAdd) {
-              element.getAttribute ? pseudo.onAdd.call(element, pseudo) : element.push(pseudo);
+              if (element.getAttribute) {
+                pseudo.onAdd.call(element, pseudo);
+              } else {
+                element.push(pseudo);
+              }
             }
           });
         }
@@ -3647,11 +709,16 @@ else {
       return listener;
     },
 
+    removePseudos: function(element, event){
+      event._pseudos.forEach(function(obj){
+        obj.onRemove.call(element, obj);
+      });
+    },
+
   /*** Events ***/
 
     parseEvent: function(type, fn) {
       var pseudos = type.split(':'),
-        noop = function(){},
         key = pseudos.shift(),
         event = xtag.merge({
           base: key,
@@ -3675,6 +742,7 @@ else {
 
     addEvent: function (element, type, fn) {
       var event = (typeof fn == 'function') ? xtag.parseEvent(type, fn) : fn;
+      event.listener.event = event;
       event._pseudos.forEach(function(obj){
         obj.onAdd.call(element, obj);
       });
@@ -3694,20 +762,20 @@ else {
     },
 
     removeEvent: function (element, type, fn) {
-      var event = xtag.parseEvent(type);
+      var event = fn.event;
       event.onRemove.call(element, event, fn);
-      xtag.removePseudos(element, event.type, fn);
+      xtag.removePseudos(element, event);
       xtag.toArray(event.base).forEach(function (name) {
         element.removeEventListener(name, fn);
       });
     },
-    
+
     removeEvents: function(element, listeners){
       for (var z in listeners) xtag.removeEvent(element, z, listeners[z]);
     }
-    
+
   };
-  
+
   xtag.typeOf = doc.register.__polyfill__.typeOf;
   xtag.clone = doc.register.__polyfill__.clone;
   xtag.merge(xtag, doc.register.__polyfill__);
@@ -3717,16 +785,16 @@ else {
 
 })();
 
-(function(){  
+(function(){
 
   xtag.register('x-appbar', {
     lifecycle: {
       created: function(){
         var header = xtag.queryChildren(this, 'header')[0];
-        if (!header){          
-          header = document.createElement('header');          
+        if (!header){
+          header = document.createElement('header');
           this.appendChild(growbox);
-        }        
+        }
         this.xtag.data.header = header;
         this.subheading = this.subheading;
       }
@@ -3737,14 +805,15 @@ else {
           return this.xtag.data.header.innerHTML;
         },
         set: function(value){
-          this.xtag.data.header.innerHTML = value;        
+          this.xtag.data.header.innerHTML = value;
         }
-      }, 
+      },
       subheading: {
+        attribute: {},
         get: function(){
           return this.getAttribute('subheading') || "";
         },
-        'set:attribute': function(value){
+        set: function(value){
           this.xtag.data.header.setAttribute('subheading', value);
         }
       }
@@ -3755,13 +824,13 @@ else {
 
 
 (function(){
-  
+
   var delayedEvents = [],
     fireMatches = function(element, mql, attr, skipFire){
       var state = (mql.matches) ? ['active', 'set', 'add'] : ['inactive', 'remove', 'remove'],
         eventType = 'mediaquery' + state[0],
         eventData = { 'query': mql };
-      element[state[1] + 'Attribute']('matches', null);     
+      element[state[1] + 'Attribute']('matches', null);
       if (!skipFire) xtag.fireEvent(element, eventType, eventData);
       (attr || (element.getAttribute('for') || '').split(' ')).forEach(function(id){
         var node = document.getElementById(id);
@@ -3793,20 +862,20 @@ else {
       });
       document.removeEventListener(delayedListener);
     };
-    
+
   document.addEventListener('__DOMComponentsLoaded__', delayedListener);
-  
+
   xtag.register('x-mediaquery', {
     lifecycle:{
       created: function(){
-        attachQuery(this);  
+        attachQuery(this);
       }
     },
     accessors:{
       'for': {
         get: function(){
           return this.getAttribute('for');
-        }, 
+        },
         set: function(value){
           var next = (value || '').split(' ');
           (this.getAttribute('for') || '').split(' ').map(function(id){
@@ -3824,18 +893,20 @@ else {
         }
       },
       'media': {
+        attribute: {},
         get: function(){
           return this.getAttribute('media');
-        }, 
-        'set:attribute(media)': function(value){
+        },
+        set: function(value){
           attachQuery(this, query);
         }
       },
       'id': {
+        attribute: {},
         get: function(){
           return this.getAttribute('id');
-        }, 
-        'set:attribute(id)': function(value){
+        },
+        set: function(value){
           var current = this.getAttribute('id');
           xtag.query(document, '.' + current).forEach(function(node){
             xtag.removeClass(node, current);
@@ -3845,7 +916,7 @@ else {
       }
     }
   });
-  
+
 })();
 (function(){
 
@@ -4022,44 +1093,6 @@ xtag.callbacks = {};
 
 })();
 
-(function(){  
-
-  xtag.register('x-panel', {
-    mixins: ['request'],
-    lifecycle:{
-      created: function(){
-        this.dataready = function(request){
-            
-          var frag = document.createDocumentFragment();
-          var container = document.createElement('div');
-          frag.appendChild(container);
-          container.innerHTML = request.responseText;
-
-          this.innerHTML = '';
-
-          xtag.toArray(container.children).forEach(function(child){        
-            if (child.nodeName == 'SCRIPT'){
-              var script = document.createElement('script');
-              script.type = child.type;
-              if (child.src.length>0){
-                script.src = child.src;
-              }else{
-                script.appendChild( 
-                document.createTextNode(child.text||child.textContent||child.innerHTML));
-              }
-              this.appendChild(script);
-            }
-            else{                
-              this.appendChild(child);
-            }
-          }, this);
-
-      }
-    }
-  }
-  });
-
-})();
 
 (function(){
 
@@ -4078,10 +1111,9 @@ xtag.callbacks = {};
 		},
 		accessors: {
 			'shift': {
+				attribute: {},
 				get: function(){
 					return this.getAttribute('shift') || '';
-				},
-				'set:attribute(shift)': function(shift){
 				}
 			}
 		},
@@ -4243,10 +1275,11 @@ xtag.callbacks = {};
     },
     accessors: {
       template:{
+        attribute: {},
         get: function(){
           return this.getAttribute('template');
         },
-        'set:attribute(template)': function(value){
+        set: function(value){
           var attr = this.getAttribute('template');
           this.xtag.__previousTemplate__ = attr;
           xtag.fireEvent(this, 'templatechange', { template: value });
