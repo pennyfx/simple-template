@@ -33,15 +33,6 @@
   var shiftbox = document.querySelector('x-shiftbox');
   var modal = document.querySelector('x-modal');
 
-  document.addEventListener('dbconnected', function(e){
-    window.dbconnection = e.server;
-    Column.myColumns(function(results){
-      results.forEach(function(item){
-          createColumn(item.name, item.feeds, item.headerColor);
-      });
-    });
-  });
-
   xtag.addEvents(document, {
     'tap:delegate(x-appbar > div:first-child)': function(){
       shiftbox.toggle();
